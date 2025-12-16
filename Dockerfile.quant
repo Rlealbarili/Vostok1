@@ -1,0 +1,68 @@
+# ============================================================================
+# VOSTOK-1 :: Dockerfile Quant Processor
+# Inclui TA-Lib C library para cálculos de indicadores técnicos
+# ============================================================================
+
+# --- Stage 1: Builder com TA-Lib ---
+FROM python:3.11-slim AS builder
+
+WORKDIR /build
+
+# Instalar dependências de build e TA-Lib C library
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    g++ \
+    make \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# Baixar e compilar TA-Lib C library
+RUN wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz && \
+    tar -xzf ta-lib-0.4.0-src.tar.gz && \
+    cd ta-lib && \
+    ./configure --prefix=/usr && \
+    make && \
+    make install && \
+    cd .. && rm -rf ta-lib ta-lib-0.4.0-src.tar.gz
+
+# Copiar e instalar requirements Python
+COPY src/quant/requirements.txt .
+RUN pip install --no-cache-dir --user numpy && \
+    pip install --no-cache-dir --user -r requirements.txt
+
+# --- Stage 2: Runtime ---
+FROM python:3.11-slim AS runtime
+
+WORKDIR /app
+
+# Copiar TA-Lib library compilada
+COPY --from=builder /usr/lib/libta_lib* /usr/lib/
+COPY --from=builder /usr/include/ta-lib /usr/include/ta-lib
+
+# Copiar dependências Python do builder
+COPY --from=builder /root/.local /root/.local
+
+# Garantir que os binários estejam no PATH
+ENV PATH=/root/.local/bin:$PATH
+ENV LD_LIBRARY_PATH=/usr/lib:$LD_LIBRARY_PATH
+
+# Copiar código fonte
+COPY src/quant/ ./quant/
+COPY src/common/ ./common/
+
+# Variáveis de ambiente padrão
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    REDIS_HOST=redis \
+    REDIS_PORT=6379 \
+    INPUT_STREAM=stream:market:btc_usdt \
+    OUTPUT_STREAM=stream:signals:tech \
+    CONSUMER_GROUP=quant_group \
+    CONSUMER_NAME=quant_worker_1
+
+# Healthcheck
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+    CMD python -c "import redis; r = redis.Redis(host='redis'); r.ping()" || exit 1
+
+# Executar
+CMD ["python", "-m", "quant.main"]

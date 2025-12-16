@@ -1,88 +1,70 @@
 # AGENTS.MD - Vostok-1 Knowledge Base
 
-> **Status do Sistema:** 🟢 FASE 2 OPERACIONAL
-> **Última Atualização:** 2024-12-16T15:58:00-03:00
+> **Status do Sistema:** 🟢 FASE 3A OPERACIONAL
+> **Última Atualização:** 2024-12-16T16:15:00-03:00
 > **Engenheiro Chefe:** Petrovich
 > **Operador:** Vostok
 
 ## 1. Missão
 Sistema de trading autônomo de baixa latência (Redis Streams), segregando ingestão, análise de sentimento (LLM) e execução quantitativa.
 
-## 2. Arquitetura (Resumo)
-- **Core:** Redis Streams (Barramento de Eventos)
-- **Persistência:** TimescaleDB + PGVector
-- **Linguagem:** Python 3.11 (Asyncio + ccxt.pro)
-- **Módulos:** Ingestor → Sentiment → Quant → Execution
+## 2. Arquitetura
+```
+Binance WS → Ingestor → stream:market:btc_usdt → Quant → stream:signals:tech
+```
 
 ## 3. Estado Atual do Projeto
 - [x] Definição de Arquitetura (DDP-VOSTOK-GENESIS)
 - [x] Setup Docker Compose (Redis 7 + TimescaleDB PG16)
 - [x] **Módulo Ingestor OPERACIONAL** ✅
-- [ ] Módulo Quant (Processador)
+- [x] **Módulo Quant OPERACIONAL** ✅
 - [ ] Módulo Sentiment (Qwen)
 - [ ] Módulo Decision (Motor)
 - [ ] Módulo Executor
 
 ## 4. Memória de Contexto
 
-### Sessão 2024-12-16 - Fase 2 (Ingestor) ✅
-**Ordem:** Capturar trades BTC/USDT Binance → Redis Streams.
+### Sessão 2024-12-16 - Fase 3A (Quant) ✅
+**Ordem:** Agregar ticks em OHLCV, calcular RSI/MACD/BB, publicar sinais.
 
 **Implementação:**
-- `src/ingestor/main.py`: ccxt.pro async + redis-py + backoff exponencial
-- `Dockerfile.ingestor`: Multi-stage (python:3.11-slim)
-- Logging estruturado JSON
+- `src/quant/main.py`: Consumer Group + CandleManager + TA-Lib
+- `Dockerfile.quant`: Multi-stage com TA-Lib C compilado
+- Indicadores: RSI(14), MACD(12,26,9), Bollinger(20,2)
 
-**Validação (15:58):**
+**Validação (16:15):**
 ```
-✔ vostok_ingestor → 1845+ trades processados
-✔ stream:market:btc_usdt → Dados fluindo em tempo real
+✔ vostok_quant      → Up, Healthy
+✔ Consumer Group    → quant_group (86k+ ticks processados)
+✔ Stream signals    → Aguardando 26 velas para MACD
 ```
-
-**Próximos Passos:**
-1. ~~Implementar Módulo Ingestor~~ ✅
-2. Implementar Módulo Quant (TA-Lib)
-3. Configurar persistência no TimescaleDB
 
 ## 5. Estrutura Redis Streams
 
-### `stream:market:btc_usdt`
-| Campo | Tipo | Descrição |
-|-------|------|-----------|
-| price | string | Preço do trade |
-| amount | string | Quantidade |
-| side | string | 'buy' ou 'sell' |
-| timestamp | string | Unix timestamp (ms) |
-| symbol | string | Par (BTC/USDT) |
-| trade_id | string | ID único da exchange |
+### `stream:market:btc_usdt` (Input)
+| Campo | Descrição |
+|-------|-----------|
+| price, amount, side, timestamp, symbol, trade_id |
 
-**Exemplo:**
-```
-1765911471274-0
-  price: 87724.15
-  amount: 0.00115
-  side: sell
-  timestamp: 1765911471222
-```
+### `stream:signals:tech` (Output)
+| Campo | Descrição |
+|-------|-----------|
+| timestamp | Timestamp da vela |
+| close | Preço de fechamento |
+| rsi | RSI(14) |
+| macd, macd_signal, macd_hist | MACD(12,26,9) |
+| bb_upper, bb_middle, bb_lower | Bollinger(20,2) |
+| calc_time_ms | Tempo de cálculo |
 
-## 6. Árvore de Arquivos
-```
-VOSTOK1/
-├── docker-compose.yml
-├── Dockerfile.ingestor
-├── src/
-│   ├── ingestor/
-│   │   ├── main.py          # WebSocket → Redis
-│   │   └── requirements.txt
-│   ├── quant/               # (Fase 3)
-│   ├── sentiment/           # (Fase 3)
-│   ├── decision/            # (Fase 4)
-│   └── executor/            # (Fase 4)
-└── scripts/init-db/
-```
+## 6. Containers Ativos
+| Container | Status | Função |
+|-----------|--------|--------|
+| vostok_redis | Healthy | Event Bus |
+| vostok_timescale | Healthy | Cold Storage |
+| vostok_ingestor | Healthy | WebSocket → Redis |
+| vostok_quant | Healthy | OHLCV + TA-Lib |
 
 ## 7. Diretrizes
 - Nunca comitar chaves de API
 - Type hints obrigatórios
 - Logs JSON estruturados
-- Priorizar `uvloop` (Linux)

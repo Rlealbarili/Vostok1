@@ -82,6 +82,30 @@ services:
       - vostok_net
     # Sem porta exposta - comunicação apenas via Redis
 
+  # --------------------------------------------------------------------------
+  # QUANT - Agregação OHLCV + Indicadores Técnicos (TA-Lib)
+  # --------------------------------------------------------------------------
+  quant:
+    build:
+      context: .
+      dockerfile: Dockerfile.quant
+    container_name: vostok_quant
+    restart: unless-stopped
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      INPUT_STREAM: stream:market:btc_usdt
+      OUTPUT_STREAM: stream:signals:tech
+      CONSUMER_GROUP: quant_group
+      CONSUMER_NAME: quant_worker_1
+    depends_on:
+      redis:
+        condition: service_healthy
+      ingestor:
+        condition: service_started
+    networks:
+      - vostok_net
+
 # ============================================================================
 # VOLUMES (Nomeados para evitar problemas de permissão)
 # ============================================================================
