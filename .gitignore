@@ -1,0 +1,44 @@
+# ============================================================================
+# VOSTOK-1 GITIGNORE
+# ============================================================================
+
+# Environment & Secrets
+.env
+*.env.local
+secrets/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+ENV/
+env/
+
+# Docker volumes (dados locais)
+data/redis/*
+data/timescale/*
+!data/**/.gitkeep
+
+# Logs
+logs/*.log
+logs/*.json
+!logs/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/

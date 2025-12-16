@@ -1,0 +1,78 @@
+version: '3.8'
+
+# ============================================================================
+# VOSTOK-1 INFRASTRUCTURE - Fase 1
+# Arquiteto: Petrovich | Operador: Vostok
+# ============================================================================
+
+services:
+  # --------------------------------------------------------------------------
+  # REDIS 7 (Alpine) - Event Bus / Hot Storage
+  # Configurado para persistência AOF (Append-Only File)
+  # --------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: vostok_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --auto-aof-rewrite-percentage 100
+      --auto-aof-rewrite-min-size 64mb
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+    volumes:
+      - vostok_redis_data:/data
+    networks:
+      - vostok_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --------------------------------------------------------------------------
+  # TIMESCALEDB (PostgreSQL 16) - Cold Storage / Time Series / Vector Store
+  # Com suporte a PGVector para embeddings do módulo Sentimento_AI
+  # --------------------------------------------------------------------------
+  timescaledb:
+    image: timescale/timescaledb-ha:pg16
+    container_name: vostok_timescale
+    restart: unless-stopped
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: vostok
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vostok_secure_2024}
+      POSTGRES_DB: vostok_trading
+    volumes:
+      - vostok_timescale_data:/home/postgres/pgdata/data
+      - ./scripts/init-db:/docker-entrypoint-initdb.d:ro
+    networks:
+      - vostok_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vostok -d vostok_trading"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    shm_size: 256mb
+
+# ============================================================================
+# VOLUMES (Nomeados para evitar problemas de permissão)
+# ============================================================================
+volumes:
+  vostok_redis_data:
+    name: vostok_redis_data
+  vostok_timescale_data:
+    name: vostok_timescale_data
+
+# ============================================================================
+# NETWORK
+# ============================================================================
+networks:
+  vostok_net:
+    driver: bridge
+    name: vostok_net
