@@ -60,6 +60,28 @@ services:
       retries: 5
     shm_size: 256mb
 
+  # --------------------------------------------------------------------------
+  # INGESTOR - Captura de trades via WebSocket (Binance -> Redis Streams)
+  # --------------------------------------------------------------------------
+  ingestor:
+    build:
+      context: .
+      dockerfile: Dockerfile.ingestor
+    container_name: vostok_ingestor
+    restart: unless-stopped
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_STREAM: stream:market:btc_usdt
+      SYMBOL: BTC/USDT
+      EXCHANGE_ID: binance
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - vostok_net
+    # Sem porta exposta - comunicação apenas via Redis
+
 # ============================================================================
 # VOLUMES (Nomeados para evitar problemas de permissão)
 # ============================================================================

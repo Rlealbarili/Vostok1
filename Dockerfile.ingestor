@@ -1,0 +1,48 @@
+# ============================================================================
+# VOSTOK-1 :: Dockerfile Ingestor
+# Multi-stage build para imagem otimizada
+# ============================================================================
+
+# --- Stage 1: Builder ---
+FROM python:3.11-slim as builder
+
+WORKDIR /build
+
+# Instalar dependências de build
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copiar e instalar requirements
+COPY src/ingestor/requirements.txt .
+RUN pip install --no-cache-dir --user -r requirements.txt
+
+# --- Stage 2: Runtime ---
+FROM python:3.11-slim as runtime
+
+WORKDIR /app
+
+# Copiar dependências do builder
+COPY --from=builder /root/.local /root/.local
+
+# Garantir que os binários estejam no PATH
+ENV PATH=/root/.local/bin:$PATH
+
+# Copiar código fonte
+COPY src/ingestor/ ./ingestor/
+COPY src/common/ ./common/
+
+# Variáveis de ambiente padrão
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    REDIS_HOST=redis \
+    REDIS_PORT=6379 \
+    SYMBOL=BTC/USDT \
+    EXCHANGE_ID=binance
+
+# Healthcheck básico (verifica se o processo está rodando)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD python -c "import redis; r = redis.Redis(host='redis'); r.ping()" || exit 1
+
+# Executar
+CMD ["python", "-m", "ingestor.main"]

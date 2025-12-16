@@ -1,83 +1,88 @@
 # AGENTS.MD - Vostok-1 Knowledge Base
 
-> **Status do Sistema:** 🟢 FASE 1 COMPLETA
-> **Última Atualização:** 2024-12-16T15:30:00-03:00
+> **Status do Sistema:** 🟢 FASE 2 OPERACIONAL
+> **Última Atualização:** 2024-12-16T15:58:00-03:00
 > **Engenheiro Chefe:** Petrovich
 > **Operador:** Vostok
 
 ## 1. Missão
-Construir um sistema de trading autônomo de baixa latência baseado em eventos (Redis Streams), segregando ingestão de dados, análise de sentimento (LLM Local) e execução quantitativa.
+Sistema de trading autônomo de baixa latência (Redis Streams), segregando ingestão, análise de sentimento (LLM) e execução quantitativa.
 
 ## 2. Arquitetura (Resumo)
-- **Core:** Redis Streams (Barramento de Eventos).
-- **Persistência:** TimescaleDB (Séries Temporais) + PGVector.
-- **Linguagem:** Python 3.11 (Asyncio).
-- **Módulos:**
-  1. `Ingestor` (WebSockets -> Redis)
-  2. `Sentiment` (News API -> Qwen -> Redis)
-  3. `Quant` (Redis -> TA-Lib -> Redis)
-  4. `Execution` (Redis -> Exchange API)
+- **Core:** Redis Streams (Barramento de Eventos)
+- **Persistência:** TimescaleDB + PGVector
+- **Linguagem:** Python 3.11 (Asyncio + ccxt.pro)
+- **Módulos:** Ingestor → Sentiment → Quant → Execution
 
 ## 3. Estado Atual do Projeto
-- [x] Definição de Arquitetura (DDP-VOSTOK-GENESIS).
-- [x] Configuração do Repositório (.gitignore).
-- [x] Setup do Docker Compose (Redis 7 + TimescaleDB PG16).
-- [ ] Implementação do Módulo Ingestor.
+- [x] Definição de Arquitetura (DDP-VOSTOK-GENESIS)
+- [x] Setup Docker Compose (Redis 7 + TimescaleDB PG16)
+- [x] **Módulo Ingestor OPERACIONAL** ✅
+- [ ] Módulo Quant (Processador)
+- [ ] Módulo Sentiment (Qwen)
+- [ ] Módulo Decision (Motor)
+- [ ] Módulo Executor
 
-## 4. Memória de Contexto (Context Compression)
+## 4. Memória de Contexto
 
-### Sessão 2024-12-16 - Fase 1 Concluída ✅
-**Ordem:** Engenheiro Chefe Petrovich - Setup inicial da infraestrutura.
+### Sessão 2024-12-16 - Fase 2 (Ingestor) ✅
+**Ordem:** Capturar trades BTC/USDT Binance → Redis Streams.
 
-**Ações Realizadas:**
-1. Criada estrutura de pastas modular: `src/`, `data/`, `scripts/`, `config/`, `logs/`, `tests/`
-2. `docker-compose.yml` configurado:
-   - **Redis 7 Alpine**: AOF, maxmemory 512MB, porta 6379
-   - **TimescaleDB PG16-HA**: PGVector, shm_size 256MB, porta **5433**
-   - **Volumes Docker nomeados** (evita problemas de permissão Windows)
-3. Scripts e configurações: `setup.sh`, `.gitignore`, `.env.example`, `01-init-extensions.sql`
+**Implementação:**
+- `src/ingestor/main.py`: ccxt.pro async + redis-py + backoff exponencial
+- `Dockerfile.ingestor`: Multi-stage (python:3.11-slim)
+- Logging estruturado JSON
 
-**Validação Final (2024-12-16 15:49):**
+**Validação (15:58):**
 ```
-✔ vostok_redis     → PONG (healthy)
-✔ vostok_timescale → timescaledb 2.24.0, vector 0.8.1 (healthy)
+✔ vostok_ingestor → 1845+ trades processados
+✔ stream:market:btc_usdt → Dados fluindo em tempo real
 ```
 
 **Próximos Passos:**
-1. ~~Executar `docker compose up -d`~~ ✅
-2. ~~Validar conexão Redis e TimescaleDB~~ ✅
-3. Iniciar implementação do Módulo `Ingestor`
+1. ~~Implementar Módulo Ingestor~~ ✅
+2. Implementar Módulo Quant (TA-Lib)
+3. Configurar persistência no TimescaleDB
 
-## 5. Árvore de Arquivos
+## 5. Estrutura Redis Streams
+
+### `stream:market:btc_usdt`
+| Campo | Tipo | Descrição |
+|-------|------|-----------|
+| price | string | Preço do trade |
+| amount | string | Quantidade |
+| side | string | 'buy' ou 'sell' |
+| timestamp | string | Unix timestamp (ms) |
+| symbol | string | Par (BTC/USDT) |
+| trade_id | string | ID único da exchange |
+
+**Exemplo:**
+```
+1765911471274-0
+  price: 87724.15
+  amount: 0.00115
+  side: sell
+  timestamp: 1765911471222
+```
+
+## 6. Árvore de Arquivos
 ```
 VOSTOK1/
-├── docker-compose.yml      # Infraestrutura containerizada
-├── setup.sh                # Script de inicialização (bash)
-├── .gitignore
-├── .env.example
-├── AGENTS.md               # Este arquivo
-├── DDP-VOSTOK-GENESIS.md   # Documento de Design
-├── config/
-├── data/
-│   ├── redis/              # Volume Redis (AOF)
-│   └── timescale/          # Volume PostgreSQL
-├── logs/
-├── scripts/
-│   └── init-db/
-│       └── 01-init-extensions.sql
+├── docker-compose.yml
+├── Dockerfile.ingestor
 ├── src/
-│   ├── common/             # Utilitários compartilhados
-│   ├── decision/           # Motor de Decisão
-│   ├── executor/           # Executor de Ordens
-│   ├── ingestor/           # Ingestão de Mercado
-│   ├── quant/              # Processador Quantitativo
-│   └── sentiment/          # Análise de Sentimento AI
-└── tests/
+│   ├── ingestor/
+│   │   ├── main.py          # WebSocket → Redis
+│   │   └── requirements.txt
+│   ├── quant/               # (Fase 3)
+│   ├── sentiment/           # (Fase 3)
+│   ├── decision/            # (Fase 4)
+│   └── executor/            # (Fase 4)
+└── scripts/init-db/
 ```
 
-## 6. Diretrizes de Desenvolvimento
-- Nunca comitar chaves de API.
-- Manter `requirements.txt` mínimo.
-- Priorizar `uvloop` para performance.
-- Type hints obrigatórios.
-- Logs em JSON estruturado.
+## 7. Diretrizes
+- Nunca comitar chaves de API
+- Type hints obrigatórios
+- Logs JSON estruturados
+- Priorizar `uvloop` (Linux)
