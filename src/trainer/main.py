@@ -30,8 +30,9 @@ logging.basicConfig(
 logger = logging.getLogger("trainer")
 
 DATA_DIR = Path(os.getenv("DATA_DIR", "/app/data"))
+TRAINING_DIR = DATA_DIR / "training"
 MODELS_DIR = Path(os.getenv("MODELS_DIR", "/app/models"))
-DATASET_FILE = DATA_DIR / "training_dataset.jsonl"
+DATASET_FILE = TRAINING_DIR / "dataset.jsonl"
 MODEL_FILE = MODELS_DIR / "sniper_v1.pkl"
 
 MIN_SAMPLES = 50  # Mínimo de amostras para treinar

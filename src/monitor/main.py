@@ -1,8 +1,8 @@
 """
-VOSTOK-1 :: Monitor TUI Dashboard (Fixed)
-==========================================
+VOSTOK-1 :: Monitor TUI Dashboard
+==================================
 Terminal User Interface para monitoramento em tempo real.
-Correções: UTC timezone, tolerância 5s, dataset size indicator.
+Path atualizado: /app/data/training/dataset.jsonl
 
 Arquiteto: Petrovich | Operador: Vostok
 """
@@ -31,11 +31,12 @@ REDIS_HOST = os.getenv("REDIS_HOST", "redis")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 SIGNAL_STREAM = os.getenv("SIGNAL_STREAM", "stream:signals:tech")
 DATA_DIR = Path(os.getenv("DATA_DIR", "/app/data"))
-DATASET_FILE = DATA_DIR / "training_dataset.jsonl"
+TRAINING_DIR = DATA_DIR / "training"
+DATASET_FILE = TRAINING_DIR / "dataset.jsonl"
 
 # Tolerâncias de status (segundos)
-ONLINE_TOLERANCE = 5    # Considera ONLINE se dados < 5s atrás
-DELAYED_TOLERANCE = 30  # Considera DELAYED se < 30s, OFFLINE se > 30s
+ONLINE_TOLERANCE = 5
+DELAYED_TOLERANCE = 30
 
 console = Console()
 
@@ -44,8 +45,6 @@ console = Console()
 # MARKET STATE
 # ============================================================================
 class MarketState:
-    """Mantém o estado atual do mercado."""
-
     def __init__(self) -> None:
         self.price: float = 0.0
         self.prev_price: float = 0.0
@@ -56,18 +55,13 @@ class MarketState:
         self.funding_rate: float = 0.0
         self.macd: float = 0.0
         self.macd_hist: float = 0.0
-        self.bb_upper: float = 0.0
-        self.bb_lower: float = 0.0
         self.volume: float = 0.0
-        self.timestamp: int = 0
         self.signals_received: int = 0
         self.last_update_utc: datetime | None = None
         self.calc_time_ms: float = 0.0
 
     def update(self, data: dict[str, Any]) -> None:
-        """Atualiza estado com novos dados."""
         self.prev_price = self.price
-        
         try:
             self.price = float(data.get('close', 0)) if data.get('close') else 0.0
             self.rsi = float(data.get('rsi', 50)) if data.get('rsi') else 50.0
@@ -77,16 +71,10 @@ class MarketState:
             self.funding_rate = float(data.get('funding_rate', 0)) if data.get('funding_rate') else 0.0
             self.macd = float(data.get('macd', 0)) if data.get('macd') else 0.0
             self.macd_hist = float(data.get('macd_hist', 0)) if data.get('macd_hist') else 0.0
-            self.bb_upper = float(data.get('bb_upper', 0)) if data.get('bb_upper') else 0.0
-            self.bb_lower = float(data.get('bb_lower', 0)) if data.get('bb_lower') else 0.0
             self.volume = float(data.get('volume', 0)) if data.get('volume') else 0.0
-            self.timestamp = int(data.get('timestamp', 0)) if data.get('timestamp') else 0
             self.calc_time_ms = float(data.get('calc_time_ms', 0)) if data.get('calc_time_ms') else 0.0
-            
             self.signals_received += 1
-            # IMPORTANTE: Usar UTC para todas as comparações
             self.last_update_utc = datetime.now(timezone.utc)
-            
         except (ValueError, TypeError):
             pass
 
@@ -103,8 +91,6 @@ class MarketState:
 # DASHBOARD RENDERER
 # ============================================================================
 class DashboardRenderer:
-    """Renderiza o dashboard TUI."""
-
     def __init__(self, state: MarketState) -> None:
         self.state = state
         self.blink_state = False
@@ -129,7 +115,6 @@ class DashboardRenderer:
     def render_header(self) -> Panel:
         self.blink_state = not self.blink_state
         
-        # Status baseado em UTC
         if self.state.last_update_utc:
             now_utc = datetime.now(timezone.utc)
             age_seconds = (now_utc - self.state.last_update_utc).total_seconds()
@@ -139,7 +124,7 @@ class DashboardRenderer:
                 status_text = "● ONLINE"
             elif age_seconds < DELAYED_TOLERANCE:
                 status_style = "yellow"
-                status_text = f"○ DELAYED ({age_seconds:.0f}s)"
+                status_text = f"○ SYNC ({age_seconds:.0f}s)"
             else:
                 status_style = "red"
                 status_text = "✗ OFFLINE"
@@ -164,12 +149,10 @@ class DashboardRenderer:
         table.add_column("Value", justify="right", width=14)
         table.add_column("Status", justify="center", width=12)
         
-        # Price
         pc = "green" if self.state.price_direction == "up" else "red" if self.state.price_direction == "down" else "white"
         pa = "▲" if self.state.price_direction == "up" else "▼" if self.state.price_direction == "down" else "─"
         table.add_row("💰 PRICE", f"[bold {pc}]${self.state.price:,.2f}[/]", f"[{pc}]{pa}[/]")
         
-        # RSI
         if self.state.rsi < 30:
             rc, rs = "red", "OVERSOLD"
         elif self.state.rsi > 70:
@@ -178,26 +161,21 @@ class DashboardRenderer:
             rc, rs = "dim", "NEUTRAL"
         table.add_row("📊 RSI", f"[{rc}]{self.state.rsi:.1f}[/]", f"[{rc}]{rs}[/]")
         
-        # CVD - DESTACADO
         cc = "bold green" if self.state.cvd > 0 else "bold red" if self.state.cvd < 0 else "dim"
         cs = "+" if self.state.cvd > 0 else ""
         cf = "BUYING" if self.state.cvd > 0 else "SELLING" if self.state.cvd < 0 else "NEUTRAL"
         table.add_row("[bold]📈 CVD (FLOW)[/]", f"[{cc}]{cs}{self.state.cvd:.4f}[/]", f"[{cc}]{cf}[/]")
         
-        # ATR
         table.add_row("📉 ATR", f"[white]{self.state.atr:.2f}[/]", "[dim]VOLATILITY[/]")
         
-        # MACD
         mc = "green" if self.state.macd_hist > 0 else "red"
         mt = "BULLISH" if self.state.macd_hist > 0 else "BEARISH"
         table.add_row("📊 MACD", f"[{mc}]{self.state.macd:.2f}[/]", f"[{mc}]{mt}[/]")
         
-        # Funding
         fp = self.state.funding_rate * 100
         fc = "green" if fp > 0 else "red" if fp < 0 else "dim"
         table.add_row("💵 FUNDING", f"[{fc}]{fp:.4f}%[/]", "[dim]8H RATE[/]")
         
-        # Volume
         table.add_row("📦 VOLUME", f"[white]{self.state.volume:.4f}[/]", "[dim]BTC[/]")
         
         return Panel(table, title="[bold cyan]MARKET INTELLIGENCE[/]", border_style="cyan")
@@ -228,27 +206,27 @@ class DashboardRenderer:
         return Panel(content, title="[bold cyan]REGIME[/]", border_style="cyan")
 
     def render_dataset_panel(self) -> Panel:
-        """Renderiza painel de dataset com contador de linhas."""
         content = Text()
         
-        # Contar linhas do dataset
         dataset_lines = self._count_dataset_lines()
+        dataset_exists = DATASET_FILE.exists()
         trades = self._read_recent_trades(3)
         
         content.append("DATASET STATUS\n", style="bold cyan")
         content.append("─" * 18 + "\n", style="dim")
         
-        # Indicador de tamanho
-        if dataset_lines > 0:
-            content.append(f"📁 SIZE: ", style="dim")
-            content.append(f"{dataset_lines} lines\n", style="bold green")
+        if not dataset_exists:
+            content.append("📁 NOT FOUND\n", style="red")
+            content.append("Run setup.sh\n", style="dim")
+        elif dataset_lines == 0:
+            content.append("📁 INITIALIZED\n", style="yellow")
+            content.append("AWAITING TRADES\n", style="dim")
         else:
             content.append(f"📁 SIZE: ", style="dim")
-            content.append("0 lines\n", style="yellow")
+            content.append(f"{dataset_lines} lines\n", style="bold green")
         
         content.append("\n")
         
-        # Últimos trades
         if trades:
             content.append("RECENT LABELS\n", style="bold cyan")
             content.append("─" * 18 + "\n", style="dim")
@@ -268,39 +246,34 @@ class DashboardRenderer:
                 content.append(f"{icon} {action}: ", style=style)
                 content.append(f"{pnl:+.2f}%\n", style=style)
         else:
-            content.append("AWAITING TRADES\n", style="dim")
             content.append("RSI<35 + CVD>0\n", style="yellow")
         
         return Panel(content, title="[bold cyan]DATASET[/]", border_style="cyan")
 
     def render_footer(self) -> Panel:
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-        
         footer = Text()
         footer.append(f"Time: {now} | ", style="dim")
         footer.append(f"Stream: {SIGNAL_STREAM} | ", style="dim")
         footer.append("Ctrl+C to exit", style="dim")
-        
         return Panel(Align.center(footer), style="dim", border_style="dim")
 
     def _count_dataset_lines(self) -> int:
-        """Conta linhas do dataset."""
         if not DATASET_FILE.exists():
             return 0
         try:
             with open(DATASET_FILE, 'r', encoding='utf-8') as f:
-                return sum(1 for _ in f)
+                return sum(1 for line in f if line.strip())
         except IOError:
             return 0
 
     def _read_recent_trades(self, n: int = 3) -> list[dict]:
-        """Lê últimos N trades."""
         if not DATASET_FILE.exists():
             return []
         try:
             with open(DATASET_FILE, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-            return [json.loads(line.strip()) for line in lines[-n:] if line.strip()]
+                lines = [l for l in f.readlines() if l.strip()]
+            return [json.loads(line.strip()) for line in lines[-n:]]
         except (IOError, json.JSONDecodeError):
             return []
 

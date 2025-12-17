@@ -29,7 +29,7 @@ services:
       retries: 5
 
   # --------------------------------------------------------------------------
-  # TIMESCALEDB (PostgreSQL 16) - Cold Storage / Time Series / Vector Store
+  # TIMESCALEDB (PostgreSQL 16) - Cold Storage / Time Series
   # --------------------------------------------------------------------------
   timescaledb:
     image: timescale/timescaledb-ha:pg16
@@ -54,7 +54,7 @@ services:
     shm_size: 256mb
 
   # --------------------------------------------------------------------------
-  # INGESTOR - Captura de trades + funding via WebSocket (Binance -> Redis)
+  # INGESTOR - WebSocket (Binance -> Redis)
   # --------------------------------------------------------------------------
   ingestor:
     build:
@@ -77,7 +77,7 @@ services:
       - vostok_net
 
   # --------------------------------------------------------------------------
-  # QUANT - Agregação OHLCV + Indicadores Técnicos (TA-Lib)
+  # QUANT - OHLCV + Indicadores Técnicos
   # --------------------------------------------------------------------------
   quant:
     build:
@@ -122,7 +122,7 @@ services:
       CONSUMER_NAME: decision_worker_1
       DATA_DIR: /app/data
     volumes:
-      - ./data:/app/data
+      - ./data/training:/app/data/training
     depends_on:
       redis:
         condition: service_healthy
@@ -132,7 +132,7 @@ services:
       - vostok_net
 
   # --------------------------------------------------------------------------
-  # MONITOR - TUI Dashboard (Rich) - Interativo
+  # MONITOR - TUI Dashboard (Rich)
   # --------------------------------------------------------------------------
   monitor:
     build:
@@ -151,7 +151,7 @@ services:
       TERM: xterm-256color
       TZ: America/Sao_Paulo
     volumes:
-      - ./data:/app/data:ro
+      - ./data/training:/app/data/training:ro
     depends_on:
       redis:
         condition: service_healthy
@@ -161,7 +161,7 @@ services:
       - gui
 
   # --------------------------------------------------------------------------
-  # TRAINER - ML Training (RandomForest) - Batch Job
+  # TRAINER - ML Training (RandomForest)
   # --------------------------------------------------------------------------
   trainer:
     build:
@@ -174,7 +174,7 @@ services:
       DATA_DIR: /app/data
       MODELS_DIR: /app/models
     volumes:
-      - ./data:/app/data:ro
+      - ./data/training:/app/data/training:ro
       - ./models:/app/models
     networks:
       - vostok_net
@@ -182,7 +182,7 @@ services:
       - batch
 
 # ============================================================================
-# VOLUMES (Nomeados)
+# VOLUMES
 # ============================================================================
 volumes:
   vostok_redis_data:

@@ -45,7 +45,8 @@ CONSUMER_NAME = os.getenv("CONSUMER_NAME", "decision_worker_1")
 
 # Diretório de dados
 DATA_DIR = Path(os.getenv("DATA_DIR", "/app/data"))
-DATASET_FILE = DATA_DIR / "training_dataset.jsonl"
+TRAINING_DIR = DATA_DIR / "training"
+DATASET_FILE = TRAINING_DIR / "dataset.jsonl"
 
 # Parâmetros da estratégia
 RSI_OVERSOLD = 35
@@ -227,6 +228,11 @@ class TripleBarrierLabeler:
         
         # Garantir diretório existe
         self.dataset_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Inicializar arquivo se não existir
+        if not self.dataset_path.exists():
+            self.dataset_path.touch()
+            logger.info(f"Dataset file initialized at {self.dataset_path}")
 
     def create_trade(
         self,
