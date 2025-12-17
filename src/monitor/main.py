@@ -1,8 +1,8 @@
 """
-VOSTOK-1 :: Monitor TUI Dashboard
-==================================
+VOSTOK-1 :: Monitor TUI Dashboard (AI Upgrade)
+===============================================
 Terminal User Interface para monitoramento em tempo real.
-Path atualizado: /app/data/training/dataset.jsonl
+Inclui painel de AI Sentiment (Qwen 2.5).
 
 Arquiteto: Petrovich | Operador: Vostok
 """
@@ -11,7 +11,7 @@ import asyncio
 import json
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +31,7 @@ REDIS_HOST = os.getenv("REDIS_HOST", "redis")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 SIGNAL_STREAM = os.getenv("SIGNAL_STREAM", "stream:signals:tech")
 LIVE_STREAM = os.getenv("LIVE_STREAM", "stream:signals:live")
+SENTIMENT_STREAM = os.getenv("SENTIMENT_STREAM", "stream:signals:sentiment")
 DATA_DIR = Path(os.getenv("DATA_DIR", "/app/data"))
 TRAINING_DIR = DATA_DIR / "training"
 DATASET_FILE = TRAINING_DIR / "dataset.jsonl"
@@ -38,6 +39,9 @@ DATASET_FILE = TRAINING_DIR / "dataset.jsonl"
 # Tolerâncias de status (segundos)
 ONLINE_TOLERANCE = 5
 DELAYED_TOLERANCE = 30
+
+# Timezone local (Brasil)
+LOCAL_TZ_OFFSET = timedelta(hours=-3)
 
 console = Console()
 
@@ -108,11 +112,63 @@ class MarketState:
 
 
 # ============================================================================
+# SENTIMENT STATE (PERSISTENTE)
+# ============================================================================
+class SentimentState:
+    """Estado persistente do sentimento IA (atualiza a cada 15 min)."""
+    
+    def __init__(self) -> None:
+        self.score: float = 0.0
+        self.summary: str = "Aguardando análise..."
+        self.confidence: float = 0.0
+        self.model: str = ""
+        self.last_update: datetime | None = None
+        self.analyses_received: int = 0
+
+    def update(self, data: dict[str, Any]) -> None:
+        """Atualiza com nova análise de sentimento."""
+        try:
+            self.score = float(data.get('sentiment_score', 0))
+            self.summary = str(data.get('summary', 'No summary'))[:80]
+            self.confidence = float(data.get('confidence', 0))
+            self.model = str(data.get('model', 'unknown'))
+            self.last_update = datetime.now(timezone.utc)
+            self.analyses_received += 1
+        except (ValueError, TypeError):
+            pass
+
+    @property
+    def has_data(self) -> bool:
+        return self.last_update is not None
+
+    @property
+    def score_color(self) -> str:
+        if self.score > 0.2:
+            return "bold green"
+        elif self.score < -0.2:
+            return "bold red"
+        return "white"
+
+    @property
+    def score_label(self) -> str:
+        if self.score > 0.5:
+            return "🔥 BULLISH"
+        elif self.score > 0.2:
+            return "📈 POSITIVE"
+        elif self.score < -0.5:
+            return "❄️ BEARISH"
+        elif self.score < -0.2:
+            return "📉 NEGATIVE"
+        return "⚖️ NEUTRAL"
+
+
+# ============================================================================
 # DASHBOARD RENDERER
 # ============================================================================
 class DashboardRenderer:
-    def __init__(self, state: MarketState) -> None:
-        self.state = state
+    def __init__(self, market_state: MarketState, sentiment_state: SentimentState) -> None:
+        self.state = market_state
+        self.sentiment = sentiment_state
         self.blink_state = False
 
     def make_layout(self) -> Layout:
@@ -122,10 +178,17 @@ class DashboardRenderer:
             Layout(name="body"),
             Layout(name="footer", size=4),
         )
+        # Split body: market (esquerda) | sidebar (direita)
         layout["body"].split_row(
-            Layout(name="market", ratio=2),
+            Layout(name="main_area", ratio=2),
             Layout(name="sidebar", ratio=1),
         )
+        # Main area: market + AI sentiment
+        layout["main_area"].split(
+            Layout(name="market", ratio=3),
+            Layout(name="ai_panel", ratio=2),
+        )
+        # Sidebar: regime + dataset
         layout["sidebar"].split(
             Layout(name="regime"),
             Layout(name="dataset"),
@@ -196,9 +259,57 @@ class DashboardRenderer:
         fc = "green" if fp > 0 else "red" if fp < 0 else "dim"
         table.add_row("💵 FUNDING", f"[{fc}]{fp:.4f}%[/]", "[dim]8H RATE[/]")
         
-        table.add_row("📦 VOLUME", f"[white]{self.state.volume:.4f}[/]", "[dim]BTC[/]")
-        
         return Panel(table, title="[bold cyan]MARKET INTELLIGENCE[/]", border_style="cyan")
+
+    def render_ai_panel(self) -> Panel:
+        """Renderiza painel de AI Sentiment (Qwen 2.5)."""
+        content = Text()
+        
+        if not self.sentiment.has_data:
+            content.append("AGUARDANDO ANÁLISE...\n\n", style="dim")
+            content.append("O módulo sentiment analisa\n", style="dim")
+            content.append("notícias a cada 15 minutos.\n", style="dim")
+        else:
+            # Score
+            content.append("SENTIMENT SCORE\n", style="bold magenta")
+            content.append("─" * 30 + "\n", style="dim")
+            
+            score_bar = self._make_score_bar(self.sentiment.score)
+            content.append(f"{self.sentiment.score:+.2f} ", style=self.sentiment.score_color)
+            content.append(f"{score_bar}\n", style="dim")
+            content.append(f"{self.sentiment.score_label}\n\n", style=self.sentiment.score_color)
+            
+            # Summary
+            content.append("SUMMARY\n", style="bold magenta")
+            content.append("─" * 30 + "\n", style="dim")
+            content.append(f"{self.sentiment.summary}\n\n", style="white")
+            
+            # Meta
+            content.append(f"Conf: {self.sentiment.confidence:.0%} | ", style="dim")
+            
+            if self.sentiment.last_update:
+                local_time = self.sentiment.last_update + LOCAL_TZ_OFFSET
+                content.append(f"Last: {local_time.strftime('%H:%M')}", style="dim")
+        
+        return Panel(
+            content, 
+            title="[bold magenta]🤖 AI SENTIMENT (QWEN 2.5)[/]", 
+            border_style="magenta"
+        )
+
+    def _make_score_bar(self, score: float) -> str:
+        """Cria barra visual do score de -1 a +1."""
+        # Normalizar score para 0-10
+        normalized = int((score + 1) * 5)  # -1->0, 0->5, +1->10
+        normalized = max(0, min(10, normalized))
+        
+        bar = ""
+        for i in range(10):
+            if i < normalized:
+                bar += "█"
+            else:
+                bar += "░"
+        return f"[{bar}]"
 
     def render_regime_panel(self) -> Panel:
         content = Text()
@@ -221,7 +332,8 @@ class DashboardRenderer:
         content.append("PERFORMANCE\n", style="bold cyan")
         content.append("─" * 18 + "\n", style="dim")
         content.append(f"Signals: {self.state.signals_received}\n", style="dim")
-        content.append(f"Calc: {self.state.calc_time_ms:.2f}ms\n", style="dim")
+        content.append(f"Pulses: {self.state.live_pulses_received}\n", style="dim")
+        content.append(f"AI: {self.sentiment.analyses_received}\n", style="dim")
         
         return Panel(content, title="[bold cyan]REGIME[/]", border_style="cyan")
 
@@ -274,7 +386,7 @@ class DashboardRenderer:
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         footer = Text()
         footer.append(f"Time: {now} | ", style="dim")
-        footer.append(f"Stream: {SIGNAL_STREAM} | ", style="dim")
+        footer.append("Streams: tech/live/sentiment | ", style="dim")
         footer.append("Ctrl+C to exit", style="dim")
         return Panel(Align.center(footer), style="dim", border_style="dim")
 
@@ -301,6 +413,7 @@ class DashboardRenderer:
         layout = self.make_layout()
         layout["header"].update(self.render_header())
         layout["market"].update(self.render_market_panel())
+        layout["ai_panel"].update(self.render_ai_panel())
         layout["regime"].update(self.render_regime_panel())
         layout["dataset"].update(self.render_dataset_panel())
         layout["footer"].update(self.render_footer())
@@ -308,13 +421,14 @@ class DashboardRenderer:
 
 
 # ============================================================================
-# MONITOR
+# MONITOR (3 STREAMS)
 # ============================================================================
 class Monitor:
     def __init__(self) -> None:
         self.redis: aioredis.Redis | None = None
-        self.state = MarketState()
-        self.renderer = DashboardRenderer(self.state)
+        self.market_state = MarketState()
+        self.sentiment_state = SentimentState()
+        self.renderer = DashboardRenderer(self.market_state, self.sentiment_state)
         self.running = False
 
     async def connect_redis(self) -> None:
@@ -334,7 +448,7 @@ class Monitor:
                 if messages:
                     for _, stream_messages in messages:
                         for message_id, data in stream_messages:
-                            self.state.update_live(data)
+                            self.market_state.update_live(data)
                             last_id = message_id
             except Exception:
                 await asyncio.sleep(0.5)
@@ -352,10 +466,28 @@ class Monitor:
                 if messages:
                     for _, stream_messages in messages:
                         for message_id, data in stream_messages:
-                            self.state.update(data)
+                            self.market_state.update(data)
                             last_id = message_id
             except Exception:
                 await asyncio.sleep(1)
+
+    async def stream_sentiment(self) -> None:
+        """Stream de análise de sentimento IA (a cada 15 min)."""
+        last_id = '$'
+        while self.running:
+            try:
+                messages = await self.redis.xread(
+                    streams={SENTIMENT_STREAM: last_id},
+                    count=1,
+                    block=1000  # 1s - sentimento é lento
+                )
+                if messages:
+                    for _, stream_messages in messages:
+                        for message_id, data in stream_messages:
+                            self.sentiment_state.update(data)
+                            last_id = message_id
+            except Exception:
+                await asyncio.sleep(5)
 
     async def run_dashboard(self) -> None:
         with Live(self.renderer.render(), refresh_per_second=8, console=console) as live:
@@ -367,10 +499,11 @@ class Monitor:
         console.clear()
         self.running = True
         await self.connect_redis()
-        # Ler de ambos os streams + atualizar dashboard
+        # Ler de TRÊS streams + atualizar dashboard
         await asyncio.gather(
             self.stream_live_pulse(),
             self.stream_signals(),
+            self.stream_sentiment(),
             self.run_dashboard(),
         )
 
