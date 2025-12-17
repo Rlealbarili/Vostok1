@@ -1,0 +1,5 @@
+# VOSTOK-1 :: Sentiment Analysis Dependencies
+# Ollama LLM Integration for Crypto Sentiment
+
+requests>=2.31.0
+redis>=5.0.0

@@ -184,6 +184,33 @@ services:
       - vostok_net
 
   # --------------------------------------------------------------------------
+  # SENTIMENT - LLM-Powered News Sentiment Analysis
+  # --------------------------------------------------------------------------
+  sentiment:
+    build:
+      context: .
+      dockerfile: Dockerfile.sentiment
+    container_name: vostok_sentiment
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      SENTIMENT_STREAM: stream:signals:sentiment
+      OLLAMA_HOST: llm_engine
+      OLLAMA_PORT: 11434
+      LLM_MODEL: qwen2.5:7b-instruct
+      ANALYSIS_INTERVAL: 900
+    depends_on:
+      redis:
+        condition: service_healthy
+      llm_engine:
+        condition: service_healthy
+    networks:
+      - vostok_net
+
+  # --------------------------------------------------------------------------
   # LLM ENGINE - Ollama (Local LLM for Sentiment Analysis)
   # GPU 0 = Dedicada/Livre | GPU 1 = Desktop (ocupada)
   # --------------------------------------------------------------------------

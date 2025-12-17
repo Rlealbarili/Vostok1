@@ -1,0 +1,38 @@
+# ============================================================================
+# VOSTOK-1 :: Dockerfile for Sentiment Analysis Module
+# Ollama LLM Integration for Crypto Market Sentiment
+# ============================================================================
+
+# --- Stage 1: Builder ---
+FROM python:3.11-slim AS builder
+
+WORKDIR /build
+
+# Instalar dependências Python
+COPY src/sentiment/requirements.txt .
+RUN pip install --no-cache-dir --user -r requirements.txt
+
+# --- Stage 2: Runtime ---
+FROM python:3.11-slim AS runtime
+
+# Metadados
+LABEL maintainer="Vostok Team"
+LABEL description="VOSTOK-1 Sentiment Analysis - Ollama LLM Integration"
+LABEL version="1.0"
+
+WORKDIR /app
+
+# Copiar dependências do builder
+COPY --from=builder /root/.local /root/.local
+
+# Copiar código fonte
+COPY src/sentiment/ ./sentiment/
+COPY src/common/ ./common/
+
+# Ajustar PATH
+ENV PATH=/root/.local/bin:$PATH
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+# Comando de execução
+CMD ["python", "-m", "sentiment.main"]
