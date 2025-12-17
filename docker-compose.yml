@@ -183,6 +183,37 @@ services:
     networks:
       - vostok_net
 
+  # --------------------------------------------------------------------------
+  # LLM ENGINE - Ollama (Local LLM for Sentiment Analysis)
+  # --------------------------------------------------------------------------
+  llm_engine:
+    image: ollama/ollama:latest
+    container_name: vostok_llm
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      OLLAMA_HOST: 0.0.0.0
+    networks:
+      - vostok_net
+    # GPU Support (optional - comment out if CPU-only)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    # Healthcheck
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
 # ============================================================================
 # VOLUMES
 # ============================================================================
@@ -191,6 +222,8 @@ volumes:
     name: vostok_redis_data
   vostok_timescale_data:
     name: vostok_timescale_data
+  ollama_data:
+    name: vostok_ollama_data
 
 # ============================================================================
 # NETWORK
