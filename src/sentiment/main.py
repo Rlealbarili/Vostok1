@@ -121,16 +121,21 @@ class RSSNewsFetcher:
         """Busca headlines de um único feed RSS."""
         feed = feedparser.parse(url)
         
-        if feed.bozo and feed.bozo_exception:
-            raise Exception(f"Feed malformado: {feed.bozo_exception}")
+        # Se não houver entries, verificar se é erro grave
+        if not feed.entries:
+            if feed.bozo and feed.bozo_exception:
+                raise Exception(f"Feed vazio/malformado: {feed.bozo_exception}")
+            return []
         
+        # Mesmo com bozo=True, tentar extrair entries (feeds parcialmente válidos)
         headlines = []
         for entry in feed.entries[:limit]:
             title = entry.get('title', '').strip()
             if title and len(title) > 10:
                 # Limpar caracteres especiais
                 title = self._clean_title(title)
-                headlines.append(title)
+                if title:  # Verificar se não ficou vazio após limpeza
+                    headlines.append(title)
         
         return headlines
 
