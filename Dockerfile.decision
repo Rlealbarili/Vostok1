@@ -1,0 +1,57 @@
+# ============================================================================
+# VOSTOK-1 :: Dockerfile Decision Engine
+# Multi-stage build otimizado
+# ============================================================================
+
+# --- Stage 1: Builder ---
+FROM python:3.11-slim AS builder
+
+WORKDIR /build
+
+# Instalar dependências de build
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copiar e instalar requirements
+COPY src/decision/requirements.txt .
+RUN pip install --no-cache-dir --user -r requirements.txt
+
+# --- Stage 2: Runtime ---
+FROM python:3.11-slim AS runtime
+
+WORKDIR /app
+
+# Copiar dependências do builder
+COPY --from=builder /root/.local /root/.local
+
+# Garantir que os binários estejam no PATH
+ENV PATH=/root/.local/bin:$PATH
+
+# Copiar código fonte
+COPY src/decision/ ./decision/
+COPY src/common/ ./common/
+
+# Criar diretório de dados
+RUN mkdir -p /app/data
+
+# Variáveis de ambiente padrão
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    REDIS_HOST=redis \
+    REDIS_PORT=6379 \
+    SIGNAL_STREAM=stream:signals:tech \
+    MARKET_STREAM=stream:market:btc_usdt \
+    CONSUMER_GROUP=decision_group \
+    CONSUMER_NAME=decision_worker_1 \
+    DATA_DIR=/app/data
+
+# Healthcheck
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+    CMD python -c "import redis; r = redis.Redis(host='redis'); r.ping()" || exit 1
+
+# Volume para dados de treino
+VOLUME ["/app/data"]
+
+# Executar
+CMD ["python", "-m", "decision.main"]

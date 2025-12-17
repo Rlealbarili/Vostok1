@@ -1,0 +1,9 @@
+# ============================================================================
+# VOSTOK-1 :: Decision Engine Dependencies
+# ============================================================================
+
+# Async Redis client
+redis>=5.0.0
+
+# Async runtime optimization (Linux only)
+uvloop>=0.19.0; sys_platform != 'win32'

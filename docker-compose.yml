@@ -106,6 +106,33 @@ services:
     networks:
       - vostok_net
 
+  # --------------------------------------------------------------------------
+  # DECISION - Data Labeling Engine (Triple Barrier)
+  # --------------------------------------------------------------------------
+  decision:
+    build:
+      context: .
+      dockerfile: Dockerfile.decision
+    container_name: vostok_decision
+    restart: unless-stopped
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      SIGNAL_STREAM: stream:signals:tech
+      MARKET_STREAM: stream:market:btc_usdt
+      CONSUMER_GROUP: decision_group
+      CONSUMER_NAME: decision_worker_1
+      DATA_DIR: /app/data
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      redis:
+        condition: service_healthy
+      quant:
+        condition: service_started
+    networks:
+      - vostok_net
+
 # ============================================================================
 # VOLUMES (Nomeados para evitar problemas de permissão)
 # ============================================================================
