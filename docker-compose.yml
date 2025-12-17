@@ -37,6 +37,8 @@ services:
     restart: unless-stopped
     ports:
       - "5433:5432"
+    env_file:
+      - .env
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-vostok}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vostok_secure_2024}
@@ -70,6 +72,8 @@ services:
       REDIS_STREAM: stream:market:btc_usdt
       SYMBOL: ${SYMBOL:-BTC/USDT}
       EXCHANGE_ID: ${EXCHANGE_ID:-binance}
+      BINANCE_API_KEY: ${BINANCE_API_KEY}
+      BINANCE_API_SECRET: ${BINANCE_API_SECRET}
     depends_on:
       redis:
         condition: service_healthy
@@ -77,7 +81,7 @@ services:
       - vostok_net
 
   # --------------------------------------------------------------------------
-  # QUANT - OHLCV + Indicadores Técnicos
+  # QUANT - OHLCV + Indicadores Técnicos + Live Pulse
   # --------------------------------------------------------------------------
   quant:
     build:
@@ -92,6 +96,7 @@ services:
       REDIS_PORT: 6379
       INPUT_STREAM: stream:market:btc_usdt
       OUTPUT_STREAM: stream:signals:tech
+      LIVE_STREAM: stream:signals:live
       CONSUMER_GROUP: quant_group
       CONSUMER_NAME: quant_worker_1
     depends_on:
@@ -132,7 +137,7 @@ services:
       - vostok_net
 
   # --------------------------------------------------------------------------
-  # MONITOR - TUI Dashboard (Rich)
+  # MONITOR - TUI Dashboard (Rich) - Lê stream:signals:live
   # --------------------------------------------------------------------------
   monitor:
     build:
@@ -147,6 +152,7 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       SIGNAL_STREAM: stream:signals:tech
+      LIVE_STREAM: stream:signals:live
       DATA_DIR: /app/data
       TERM: xterm-256color
       TZ: America/Sao_Paulo
@@ -157,8 +163,6 @@ services:
         condition: service_healthy
     networks:
       - vostok_net
-    profiles:
-      - gui
 
   # --------------------------------------------------------------------------
   # TRAINER - ML Training (RandomForest)
@@ -178,8 +182,6 @@ services:
       - ./models:/app/models
     networks:
       - vostok_net
-    profiles:
-      - batch
 
 # ============================================================================
 # VOLUMES

@@ -30,6 +30,7 @@ from rich.align import Align
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 SIGNAL_STREAM = os.getenv("SIGNAL_STREAM", "stream:signals:tech")
+LIVE_STREAM = os.getenv("LIVE_STREAM", "stream:signals:live")
 DATA_DIR = Path(os.getenv("DATA_DIR", "/app/data"))
 TRAINING_DIR = DATA_DIR / "training"
 DATASET_FILE = TRAINING_DIR / "dataset.jsonl"
@@ -57,10 +58,29 @@ class MarketState:
         self.macd_hist: float = 0.0
         self.volume: float = 0.0
         self.signals_received: int = 0
+        self.live_pulses_received: int = 0
         self.last_update_utc: datetime | None = None
         self.calc_time_ms: float = 0.0
 
+    def update_live(self, data: dict[str, Any]) -> None:
+        """Atualiza com live_pulse (apenas preço e CVD parcial)."""
+        try:
+            price = data.get('price')
+            if price:
+                self.prev_price = self.price
+                self.price = float(price)
+            
+            cvd = data.get('cvd_current')
+            if cvd:
+                self.cvd = float(cvd)
+            
+            self.live_pulses_received += 1
+            self.last_update_utc = datetime.now(timezone.utc)
+        except (ValueError, TypeError):
+            pass
+
     def update(self, data: dict[str, Any]) -> None:
+        """Atualiza com sinal técnico completo."""
         self.prev_price = self.price
         try:
             self.price = float(data.get('close', 0)) if data.get('close') else 0.0
@@ -301,7 +321,26 @@ class Monitor:
         self.redis = aioredis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
         await self.redis.ping()
 
+    async def stream_live_pulse(self) -> None:
+        """Stream de live_pulse para atualização em tempo real."""
+        last_id = '$'
+        while self.running:
+            try:
+                messages = await self.redis.xread(
+                    streams={LIVE_STREAM: last_id},
+                    count=10,
+                    block=50  # 50ms para alta frequência
+                )
+                if messages:
+                    for _, stream_messages in messages:
+                        for message_id, data in stream_messages:
+                            self.state.update_live(data)
+                            last_id = message_id
+            except Exception:
+                await asyncio.sleep(0.5)
+
     async def stream_signals(self) -> None:
+        """Stream de sinais técnicos completos."""
         last_id = '$'
         while self.running:
             try:
@@ -319,16 +358,21 @@ class Monitor:
                 await asyncio.sleep(1)
 
     async def run_dashboard(self) -> None:
-        with Live(self.renderer.render(), refresh_per_second=4, console=console) as live:
+        with Live(self.renderer.render(), refresh_per_second=8, console=console) as live:
             while self.running:
                 live.update(self.renderer.render())
-                await asyncio.sleep(0.25)
+                await asyncio.sleep(0.125)  # 8 FPS
 
     async def start(self) -> None:
         console.clear()
         self.running = True
         await self.connect_redis()
-        await asyncio.gather(self.stream_signals(), self.run_dashboard())
+        # Ler de ambos os streams + atualizar dashboard
+        await asyncio.gather(
+            self.stream_live_pulse(),
+            self.stream_signals(),
+            self.run_dashboard(),
+        )
 
     async def stop(self) -> None:
         self.running = False

@@ -47,6 +47,7 @@ REDIS_HOST = os.getenv("REDIS_HOST", "redis")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 INPUT_STREAM = os.getenv("INPUT_STREAM", "stream:market:btc_usdt")
 OUTPUT_STREAM = os.getenv("OUTPUT_STREAM", "stream:signals:tech")
+LIVE_STREAM = os.getenv("LIVE_STREAM", "stream:signals:live")
 CONSUMER_GROUP = os.getenv("CONSUMER_GROUP", "quant_group")
 CONSUMER_NAME = os.getenv("CONSUMER_NAME", "quant_worker_1")
 
@@ -418,6 +419,7 @@ class QuantProcessor:
         self.indicator_calc = IndicatorCalculator()
         self.running = False
         self.signals_published = 0
+        self.live_pulses_published = 0
 
     async def connect_redis(self) -> None:
         """Conecta ao Redis."""
@@ -439,15 +441,51 @@ class QuantProcessor:
                 raise
 
     async def process_message(self, message_id: str, data: dict[str, Any]) -> None:
-        """Processa mensagem do stream."""
+        """Processa mensagem do stream e publica live_pulse."""
         try:
+            # Extrair dados do tick para live_pulse (antes de process_tick)
+            tick_price = data.get('price')
+            tick_timestamp = data.get('timestamp')
+            msg_type = data.get('type', 'trade')
+            
             closed_candle = self.candle_manager.process_tick(data)
             
+            # Publicar live_pulse para cada trade tick (não funding)
+            if msg_type == 'trade' and tick_price and self.candle_manager.current_candle:
+                await self.publish_live_pulse(tick_price, tick_timestamp)
+            
+            # Publicar sinal completo no fechamento da vela
             if closed_candle is not None:
                 await self.calculate_and_publish_signals(closed_candle)
                 
         except Exception as e:
             logger.warning(f"Erro ao processar {message_id}: {e}")
+
+    async def publish_live_pulse(self, price: str, timestamp: str) -> None:
+        """Publica live_pulse com dados parciais da vela atual."""
+        try:
+            candle = self.candle_manager.current_candle
+            if not candle:
+                return
+            
+            # CVD acumulado parcial da vela atual
+            cvd_current = candle.get('buy_volume', 0) - candle.get('sell_volume', 0)
+            
+            live_payload = {
+                'type': 'live_pulse',
+                'price': str(price),
+                'cvd_current': str(round(cvd_current, 6)),
+                'timestamp': str(timestamp),
+                'candle_high': str(round(candle.get('high', 0), 2)),
+                'candle_low': str(round(candle.get('low', 0), 2)),
+            }
+            
+            # Publicar com maxlen pequeno (só precisamos do último)
+            await self.redis.xadd(LIVE_STREAM, live_payload, maxlen=100)
+            self.live_pulses_published += 1
+            
+        except Exception:
+            pass  # Não logar cada pulse para evitar spam
 
     async def calculate_and_publish_signals(self, candle: dict[str, Any]) -> None:
         """Calcula indicadores e publica sinal técnico completo."""
