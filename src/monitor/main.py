@@ -1,11 +1,10 @@
 """
-VOSTOK-1 :: Monitor TUI Dashboard
-==================================
-Terminal User Interface para monitoramento em tempo real
-do sistema de trading usando a biblioteca Rich.
+VOSTOK-1 :: Monitor TUI Dashboard (Fixed)
+==========================================
+Terminal User Interface para monitoramento em tempo real.
+Correções: UTC timezone, tolerância 5s, dataset size indicator.
 
 Arquiteto: Petrovich | Operador: Vostok
-Stack: Python 3.11 + asyncio + rich + redis-py
 """
 
 import asyncio
@@ -23,7 +22,6 @@ from rich.live import Live
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
-from rich.style import Style
 from rich.align import Align
 
 # ============================================================================
@@ -35,91 +33,65 @@ SIGNAL_STREAM = os.getenv("SIGNAL_STREAM", "stream:signals:tech")
 DATA_DIR = Path(os.getenv("DATA_DIR", "/app/data"))
 DATASET_FILE = DATA_DIR / "training_dataset.jsonl"
 
+# Tolerâncias de status (segundos)
+ONLINE_TOLERANCE = 5    # Considera ONLINE se dados < 5s atrás
+DELAYED_TOLERANCE = 30  # Considera DELAYED se < 30s, OFFLINE se > 30s
+
 console = Console()
 
 
 # ============================================================================
-# MARKET STATE - Estado do Mercado
+# MARKET STATE
 # ============================================================================
 class MarketState:
-    """Mantém o estado atual do mercado para exibição."""
+    """Mantém o estado atual do mercado."""
 
     def __init__(self) -> None:
-        # Preços
         self.price: float = 0.0
         self.prev_price: float = 0.0
-        
-        # Indicadores
         self.rsi: float = 50.0
         self.cvd: float = 0.0
         self.entropy: float = 0.0
         self.atr: float = 0.0
         self.funding_rate: float = 0.0
-        
-        # MACD
         self.macd: float = 0.0
-        self.macd_signal: float = 0.0
         self.macd_hist: float = 0.0
-        
-        # Bollinger
         self.bb_upper: float = 0.0
-        self.bb_middle: float = 0.0
         self.bb_lower: float = 0.0
-        
-        # OHLCV
-        self.open: float = 0.0
-        self.high: float = 0.0
-        self.low: float = 0.0
         self.volume: float = 0.0
-        
-        # Meta
         self.timestamp: int = 0
         self.signals_received: int = 0
-        self.last_update: datetime | None = None
+        self.last_update_utc: datetime | None = None
         self.calc_time_ms: float = 0.0
 
     def update(self, data: dict[str, Any]) -> None:
-        """Atualiza estado com novos dados do stream."""
+        """Atualiza estado com novos dados."""
         self.prev_price = self.price
         
         try:
-            # Preço e OHLCV
             self.price = float(data.get('close', 0)) if data.get('close') else 0.0
-            self.open = float(data.get('open', 0)) if data.get('open') else 0.0
-            self.high = float(data.get('high', 0)) if data.get('high') else 0.0
-            self.low = float(data.get('low', 0)) if data.get('low') else 0.0
-            self.volume = float(data.get('volume', 0)) if data.get('volume') else 0.0
-            
-            # Indicadores principais
             self.rsi = float(data.get('rsi', 50)) if data.get('rsi') else 50.0
             self.cvd = float(data.get('cvd_absolute', 0)) if data.get('cvd_absolute') else 0.0
             self.entropy = float(data.get('entropy', 0)) if data.get('entropy') else 0.0
             self.atr = float(data.get('volatility_atr', 0)) if data.get('volatility_atr') else 0.0
             self.funding_rate = float(data.get('funding_rate', 0)) if data.get('funding_rate') else 0.0
-            
-            # MACD
             self.macd = float(data.get('macd', 0)) if data.get('macd') else 0.0
-            self.macd_signal = float(data.get('macd_signal', 0)) if data.get('macd_signal') else 0.0
             self.macd_hist = float(data.get('macd_hist', 0)) if data.get('macd_hist') else 0.0
-            
-            # Bollinger
             self.bb_upper = float(data.get('bb_upper', 0)) if data.get('bb_upper') else 0.0
-            self.bb_middle = float(data.get('bb_middle', 0)) if data.get('bb_middle') else 0.0
             self.bb_lower = float(data.get('bb_lower', 0)) if data.get('bb_lower') else 0.0
-            
-            # Meta
+            self.volume = float(data.get('volume', 0)) if data.get('volume') else 0.0
             self.timestamp = int(data.get('timestamp', 0)) if data.get('timestamp') else 0
             self.calc_time_ms = float(data.get('calc_time_ms', 0)) if data.get('calc_time_ms') else 0.0
             
             self.signals_received += 1
-            self.last_update = datetime.now(timezone.utc)
+            # IMPORTANTE: Usar UTC para todas as comparações
+            self.last_update_utc = datetime.now(timezone.utc)
             
         except (ValueError, TypeError):
             pass
 
     @property
     def price_direction(self) -> str:
-        """Retorna direção do preço."""
         if self.price > self.prev_price:
             return "up"
         elif self.price < self.prev_price:
@@ -138,52 +110,48 @@ class DashboardRenderer:
         self.blink_state = False
 
     def make_layout(self) -> Layout:
-        """Cria o layout do dashboard."""
         layout = Layout()
-        
         layout.split(
             Layout(name="header", size=5),
             Layout(name="body"),
             Layout(name="footer", size=4),
         )
-        
         layout["body"].split_row(
             Layout(name="market", ratio=2),
             Layout(name="sidebar", ratio=1),
         )
-        
         layout["sidebar"].split(
             Layout(name="regime"),
-            Layout(name="trades"),
+            Layout(name="dataset"),
         )
-        
         return layout
 
     def render_header(self) -> Panel:
-        """Renderiza o header."""
         self.blink_state = not self.blink_state
         
-        # Status
-        if self.state.last_update:
-            age = (datetime.now(timezone.utc) - self.state.last_update).total_seconds()
-            if age < 5:
+        # Status baseado em UTC
+        if self.state.last_update_utc:
+            now_utc = datetime.now(timezone.utc)
+            age_seconds = (now_utc - self.state.last_update_utc).total_seconds()
+            
+            if age_seconds < ONLINE_TOLERANCE:
                 status_style = "bold green" if self.blink_state else "green"
-                status_text = "● SYSTEM: ONLINE"
-            elif age < 30:
+                status_text = "● ONLINE"
+            elif age_seconds < DELAYED_TOLERANCE:
                 status_style = "yellow"
-                status_text = "○ SYSTEM: DELAYED"
+                status_text = f"○ DELAYED ({age_seconds:.0f}s)"
             else:
                 status_style = "red"
-                status_text = "✗ SYSTEM: OFFLINE"
+                status_text = "✗ OFFLINE"
         else:
             status_style = "dim"
-            status_text = "◌ SYSTEM: WAITING"
+            status_text = "◌ WAITING"
         
         title = Text()
         title.append("╔══════════════════════════════════════════════════════════════╗\n", style="cyan")
         title.append("║   ", style="cyan")
         title.append("VOSTOK-1 SNIPER PROTOCOL", style="bold cyan")
-        title.append("                         ", style="cyan")
+        title.append("               ", style="cyan")
         title.append(status_text, style=status_style)
         title.append("  ║\n", style="cyan")
         title.append("╚══════════════════════════════════════════════════════════════╝", style="cyan")
@@ -191,124 +159,99 @@ class DashboardRenderer:
         return Panel(Align.center(title), style="cyan", border_style="cyan")
 
     def render_market_panel(self) -> Panel:
-        """Renderiza painel de inteligência de mercado."""
         table = Table(show_header=True, header_style="bold cyan", expand=True, box=None)
         table.add_column("Metric", style="dim", width=16)
         table.add_column("Value", justify="right", width=14)
         table.add_column("Status", justify="center", width=12)
         
         # Price
-        price_color = "green" if self.state.price_direction == "up" else "red" if self.state.price_direction == "down" else "white"
-        price_arrow = "▲" if self.state.price_direction == "up" else "▼" if self.state.price_direction == "down" else "─"
-        table.add_row(
-            "💰 PRICE",
-            f"[bold {price_color}]${self.state.price:,.2f}[/]",
-            f"[{price_color}]{price_arrow}[/]"
-        )
+        pc = "green" if self.state.price_direction == "up" else "red" if self.state.price_direction == "down" else "white"
+        pa = "▲" if self.state.price_direction == "up" else "▼" if self.state.price_direction == "down" else "─"
+        table.add_row("💰 PRICE", f"[bold {pc}]${self.state.price:,.2f}[/]", f"[{pc}]{pa}[/]")
         
         # RSI
         if self.state.rsi < 30:
-            rsi_color, rsi_status = "red", "OVERSOLD"
+            rc, rs = "red", "OVERSOLD"
         elif self.state.rsi > 70:
-            rsi_color, rsi_status = "green", "OVERBOUGHT"
+            rc, rs = "green", "OVERBOUGHT"
         else:
-            rsi_color, rsi_status = "dim", "NEUTRAL"
-        table.add_row(
-            "📊 RSI",
-            f"[{rsi_color}]{self.state.rsi:.1f}[/]",
-            f"[{rsi_color}]{rsi_status}[/]"
-        )
+            rc, rs = "dim", "NEUTRAL"
+        table.add_row("📊 RSI", f"[{rc}]{self.state.rsi:.1f}[/]", f"[{rc}]{rs}[/]")
         
-        # CVD (Order Flow) - DESTACADO
-        cvd_color = "bold green" if self.state.cvd > 0 else "bold red" if self.state.cvd < 0 else "dim"
-        cvd_sign = "+" if self.state.cvd > 0 else ""
-        cvd_flow = "BUYING" if self.state.cvd > 0 else "SELLING" if self.state.cvd < 0 else "NEUTRAL"
-        table.add_row(
-            "[bold]📈 CVD (FLOW)[/]",
-            f"[{cvd_color}]{cvd_sign}{self.state.cvd:.4f}[/]",
-            f"[{cvd_color}]{cvd_flow}[/]"
-        )
+        # CVD - DESTACADO
+        cc = "bold green" if self.state.cvd > 0 else "bold red" if self.state.cvd < 0 else "dim"
+        cs = "+" if self.state.cvd > 0 else ""
+        cf = "BUYING" if self.state.cvd > 0 else "SELLING" if self.state.cvd < 0 else "NEUTRAL"
+        table.add_row("[bold]📈 CVD (FLOW)[/]", f"[{cc}]{cs}{self.state.cvd:.4f}[/]", f"[{cc}]{cf}[/]")
         
         # ATR
-        table.add_row(
-            "📉 ATR",
-            f"[white]{self.state.atr:.2f}[/]",
-            "[dim]VOLATILITY[/]"
-        )
+        table.add_row("📉 ATR", f"[white]{self.state.atr:.2f}[/]", "[dim]VOLATILITY[/]")
         
         # MACD
-        macd_color = "green" if self.state.macd_hist > 0 else "red"
-        macd_trend = "BULLISH" if self.state.macd_hist > 0 else "BEARISH"
-        table.add_row(
-            "📊 MACD",
-            f"[{macd_color}]{self.state.macd:.2f}[/]",
-            f"[{macd_color}]{macd_trend}[/]"
-        )
+        mc = "green" if self.state.macd_hist > 0 else "red"
+        mt = "BULLISH" if self.state.macd_hist > 0 else "BEARISH"
+        table.add_row("📊 MACD", f"[{mc}]{self.state.macd:.2f}[/]", f"[{mc}]{mt}[/]")
         
-        # Funding Rate
-        funding_pct = self.state.funding_rate * 100
-        funding_color = "green" if funding_pct > 0 else "red" if funding_pct < 0 else "dim"
-        table.add_row(
-            "💵 FUNDING",
-            f"[{funding_color}]{funding_pct:.4f}%[/]",
-            "[dim]8H RATE[/]"
-        )
+        # Funding
+        fp = self.state.funding_rate * 100
+        fc = "green" if fp > 0 else "red" if fp < 0 else "dim"
+        table.add_row("💵 FUNDING", f"[{fc}]{fp:.4f}%[/]", "[dim]8H RATE[/]")
         
-        # Bollinger Position
-        if self.state.bb_upper > 0:
-            bb_range = self.state.bb_upper - self.state.bb_lower
-            bb_position = (self.state.price - self.state.bb_lower) / bb_range * 100 if bb_range > 0 else 50
-            bb_color = "red" if bb_position > 80 else "green" if bb_position < 20 else "dim"
-            table.add_row(
-                "📏 BB POSITION",
-                f"[{bb_color}]{bb_position:.0f}%[/]",
-                "[dim]IN BANDS[/]"
-            )
+        # Volume
+        table.add_row("📦 VOLUME", f"[white]{self.state.volume:.4f}[/]", "[dim]BTC[/]")
         
         return Panel(table, title="[bold cyan]MARKET INTELLIGENCE[/]", border_style="cyan")
 
     def render_regime_panel(self) -> Panel:
-        """Renderiza painel de regime/entropia."""
         content = Text()
         
-        # Entropy gauge
         entropy = self.state.entropy
         if entropy > 0.8:
-            entropy_style = "bold red blink"
-            entropy_label = "⚠️  CHAOS MODE"
+            es, el = "bold red blink", "⚠️  CHAOS MODE"
         elif entropy > 0.6:
-            entropy_style = "yellow"
-            entropy_label = "⚡ HIGH NOISE"
+            es, el = "yellow", "⚡ HIGH NOISE"
         elif entropy > 0.3:
-            entropy_style = "dim"
-            entropy_label = "◐ NORMAL"
+            es, el = "dim", "◐ NORMAL"
         else:
-            entropy_style = "green"
-            entropy_label = "✓ TRENDING"
+            es, el = "green", "✓ TRENDING"
         
         content.append("ENTROPY (REGIME)\n", style="bold cyan")
-        content.append("─" * 20 + "\n", style="dim")
-        content.append(f"{entropy:.4f}", style=entropy_style)
-        content.append(f"\n{entropy_label}\n\n", style=entropy_style)
+        content.append("─" * 18 + "\n", style="dim")
+        content.append(f"{entropy:.4f}", style=es)
+        content.append(f"\n{el}\n\n", style=es)
         
-        # Stats
-        content.append("STATS\n", style="bold cyan")
-        content.append("─" * 20 + "\n", style="dim")
+        content.append("PERFORMANCE\n", style="bold cyan")
+        content.append("─" * 18 + "\n", style="dim")
         content.append(f"Signals: {self.state.signals_received}\n", style="dim")
         content.append(f"Calc: {self.state.calc_time_ms:.2f}ms\n", style="dim")
         
         return Panel(content, title="[bold cyan]REGIME[/]", border_style="cyan")
 
-    def render_trades_panel(self) -> Panel:
-        """Renderiza painel de trades virtuais."""
+    def render_dataset_panel(self) -> Panel:
+        """Renderiza painel de dataset com contador de linhas."""
         content = Text()
         
-        # Tentar ler últimos trades do dataset
-        trades = self._read_recent_trades(5)
+        # Contar linhas do dataset
+        dataset_lines = self._count_dataset_lines()
+        trades = self._read_recent_trades(3)
         
+        content.append("DATASET STATUS\n", style="bold cyan")
+        content.append("─" * 18 + "\n", style="dim")
+        
+        # Indicador de tamanho
+        if dataset_lines > 0:
+            content.append(f"📁 SIZE: ", style="dim")
+            content.append(f"{dataset_lines} lines\n", style="bold green")
+        else:
+            content.append(f"📁 SIZE: ", style="dim")
+            content.append("0 lines\n", style="yellow")
+        
+        content.append("\n")
+        
+        # Últimos trades
         if trades:
             content.append("RECENT LABELS\n", style="bold cyan")
-            content.append("─" * 20 + "\n", style="dim")
+            content.append("─" * 18 + "\n", style="dim")
             
             for trade in trades:
                 label = trade.get('outcome_label', '?')
@@ -316,76 +259,65 @@ class DashboardRenderer:
                 pnl = trade.get('pnl_percent', 0)
                 
                 if label == 1:
-                    style = "green"
-                    icon = "✓"
+                    style, icon = "green", "✓"
                 elif label == 0:
-                    style = "red"
-                    icon = "✗"
+                    style, icon = "red", "✗"
                 else:
-                    style = "dim"
-                    icon = "?"
+                    style, icon = "dim", "?"
                 
                 content.append(f"{icon} {action}: ", style=style)
                 content.append(f"{pnl:+.2f}%\n", style=style)
         else:
             content.append("AWAITING TRADES\n", style="dim")
-            content.append("─" * 20 + "\n", style="dim")
-            content.append("No labels yet.\n", style="dim")
-            content.append("Waiting for\n", style="dim")
-            content.append("RSI < 35 + CVD > 0\n", style="yellow")
+            content.append("RSI<35 + CVD>0\n", style="yellow")
         
         return Panel(content, title="[bold cyan]DATASET[/]", border_style="cyan")
 
     def render_footer(self) -> Panel:
-        """Renderiza footer."""
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         
         footer = Text()
-        footer.append(f"Last Update: {now} | ", style="dim")
+        footer.append(f"Time: {now} | ", style="dim")
         footer.append(f"Stream: {SIGNAL_STREAM} | ", style="dim")
-        footer.append("Press Ctrl+C to exit", style="dim")
+        footer.append("Ctrl+C to exit", style="dim")
         
         return Panel(Align.center(footer), style="dim", border_style="dim")
 
-    def _read_recent_trades(self, n: int = 5) -> list[dict]:
-        """Lê os últimos N trades do dataset."""
+    def _count_dataset_lines(self) -> int:
+        """Conta linhas do dataset."""
+        if not DATASET_FILE.exists():
+            return 0
+        try:
+            with open(DATASET_FILE, 'r', encoding='utf-8') as f:
+                return sum(1 for _ in f)
+        except IOError:
+            return 0
+
+    def _read_recent_trades(self, n: int = 3) -> list[dict]:
+        """Lê últimos N trades."""
         if not DATASET_FILE.exists():
             return []
-        
         try:
             with open(DATASET_FILE, 'r', encoding='utf-8') as f:
                 lines = f.readlines()
-            
-            recent = []
-            for line in lines[-n:]:
-                try:
-                    recent.append(json.loads(line.strip()))
-                except json.JSONDecodeError:
-                    pass
-            
-            return recent
-        except IOError:
+            return [json.loads(line.strip()) for line in lines[-n:] if line.strip()]
+        except (IOError, json.JSONDecodeError):
             return []
 
     def render(self) -> Layout:
-        """Renderiza o dashboard completo."""
         layout = self.make_layout()
-        
         layout["header"].update(self.render_header())
         layout["market"].update(self.render_market_panel())
         layout["regime"].update(self.render_regime_panel())
-        layout["trades"].update(self.render_trades_panel())
+        layout["dataset"].update(self.render_dataset_panel())
         layout["footer"].update(self.render_footer())
-        
         return layout
 
 
 # ============================================================================
-# MONITOR - Orquestrador Principal
+# MONITOR
 # ============================================================================
 class Monitor:
-    """Monitor principal com streaming de Redis."""
-
     def __init__(self) -> None:
         self.redis: aioredis.Redis | None = None
         self.state = MarketState()
@@ -393,63 +325,44 @@ class Monitor:
         self.running = False
 
     async def connect_redis(self) -> None:
-        """Conecta ao Redis."""
-        self.redis = aioredis.Redis(
-            host=REDIS_HOST, port=REDIS_PORT, decode_responses=True
-        )
+        self.redis = aioredis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
         await self.redis.ping()
 
     async def stream_signals(self) -> None:
-        """Stream de sinais do Redis."""
-        last_id = '$'  # Apenas novas mensagens
-        
+        last_id = '$'
         while self.running:
             try:
                 messages = await self.redis.xread(
                     streams={SIGNAL_STREAM: last_id},
                     count=1,
-                    block=100  # 100ms para refresh suave
+                    block=100
                 )
-                
                 if messages:
-                    for stream_name, stream_messages in messages:
+                    for _, stream_messages in messages:
                         for message_id, data in stream_messages:
                             self.state.update(data)
                             last_id = message_id
-                            
             except Exception:
                 await asyncio.sleep(1)
 
     async def run_dashboard(self) -> None:
-        """Executa o dashboard com Live display."""
         with Live(self.renderer.render(), refresh_per_second=4, console=console) as live:
             while self.running:
                 live.update(self.renderer.render())
                 await asyncio.sleep(0.25)
 
     async def start(self) -> None:
-        """Inicia o monitor."""
         console.clear()
         self.running = True
-        
         await self.connect_redis()
-        
-        # Executar stream e dashboard concorrentemente
-        await asyncio.gather(
-            self.stream_signals(),
-            self.run_dashboard(),
-        )
+        await asyncio.gather(self.stream_signals(), self.run_dashboard())
 
     async def stop(self) -> None:
-        """Para o monitor."""
         self.running = False
         if self.redis:
             await self.redis.close()
 
 
-# ============================================================================
-# ENTRY POINT
-# ============================================================================
 async def main() -> None:
     monitor = Monitor()
     try:

@@ -1,14 +1,11 @@
-version: '3.8'
-
 # ============================================================================
-# VOSTOK-1 INFRASTRUCTURE - Fase 1
-# Arquiteto: Petrovich | Operador: Vostok
+# VOSTOK-1 :: Docker Compose Orchestration
+# Sistema de Trading Autônomo com Data Labeling e TUI Monitor
 # ============================================================================
 
 services:
   # --------------------------------------------------------------------------
-  # REDIS 7 (Alpine) - Event Bus / Hot Storage
-  # Configurado para persistência AOF (Append-Only File)
+  # REDIS 7 (Alpine) - Event Bus / Stream Central
   # --------------------------------------------------------------------------
   redis:
     image: redis:7-alpine
@@ -17,12 +14,9 @@ services:
     ports:
       - "6379:6379"
     command: >
-      redis-server
-      --appendonly yes
-      --appendfsync everysec
-      --auto-aof-rewrite-percentage 100
-      --auto-aof-rewrite-min-size 64mb
-      --maxmemory 512mb
+      redis-server 
+      --appendonly yes 
+      --maxmemory 512mb 
       --maxmemory-policy allkeys-lru
     volumes:
       - vostok_redis_data:/data
@@ -30,13 +24,12 @@ services:
       - vostok_net
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
+      interval: 5s
+      timeout: 3s
       retries: 5
 
   # --------------------------------------------------------------------------
   # TIMESCALEDB (PostgreSQL 16) - Cold Storage / Time Series / Vector Store
-  # Com suporte a PGVector para embeddings do módulo Sentimento_AI
   # --------------------------------------------------------------------------
   timescaledb:
     image: timescale/timescaledb-ha:pg16
@@ -45,9 +38,9 @@ services:
     ports:
       - "5433:5432"
     environment:
-      POSTGRES_USER: vostok
+      POSTGRES_USER: ${POSTGRES_USER:-vostok}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vostok_secure_2024}
-      POSTGRES_DB: vostok_trading
+      POSTGRES_DB: ${POSTGRES_DB:-vostok_trading}
     volumes:
       - vostok_timescale_data:/home/postgres/pgdata/data
       - ./scripts/init-db:/docker-entrypoint-initdb.d:ro
@@ -61,7 +54,7 @@ services:
     shm_size: 256mb
 
   # --------------------------------------------------------------------------
-  # INGESTOR - Captura de trades via WebSocket (Binance -> Redis Streams)
+  # INGESTOR - Captura de trades + funding via WebSocket (Binance -> Redis)
   # --------------------------------------------------------------------------
   ingestor:
     build:
@@ -69,18 +62,19 @@ services:
       dockerfile: Dockerfile.ingestor
     container_name: vostok_ingestor
     restart: unless-stopped
+    env_file:
+      - .env
     environment:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_STREAM: stream:market:btc_usdt
-      SYMBOL: BTC/USDT
-      EXCHANGE_ID: binance
+      SYMBOL: ${SYMBOL:-BTC/USDT}
+      EXCHANGE_ID: ${EXCHANGE_ID:-binance}
     depends_on:
       redis:
         condition: service_healthy
     networks:
       - vostok_net
-    # Sem porta exposta - comunicação apenas via Redis
 
   # --------------------------------------------------------------------------
   # QUANT - Agregação OHLCV + Indicadores Técnicos (TA-Lib)
@@ -91,6 +85,8 @@ services:
       dockerfile: Dockerfile.quant
     container_name: vostok_quant
     restart: unless-stopped
+    env_file:
+      - .env
     environment:
       REDIS_HOST: redis
       REDIS_PORT: 6379
@@ -115,6 +111,8 @@ services:
       dockerfile: Dockerfile.decision
     container_name: vostok_decision
     restart: unless-stopped
+    env_file:
+      - .env
     environment:
       REDIS_HOST: redis
       REDIS_PORT: 6379
@@ -134,22 +132,24 @@ services:
       - vostok_net
 
   # --------------------------------------------------------------------------
-  # MONITOR - TUI Dashboard (Rich) - Monitoramento em Tempo Real
+  # MONITOR - TUI Dashboard (Rich) - Interativo
   # --------------------------------------------------------------------------
   monitor:
     build:
       context: .
       dockerfile: Dockerfile.monitor
     container_name: vostok_monitor
-    restart: "no"  # Não reiniciar automaticamente (interativo)
     stdin_open: true
     tty: true
+    env_file:
+      - .env
     environment:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       SIGNAL_STREAM: stream:signals:tech
       DATA_DIR: /app/data
       TERM: xterm-256color
+      TZ: America/Sao_Paulo
     volumes:
       - ./data:/app/data:ro
     depends_on:
@@ -157,9 +157,32 @@ services:
         condition: service_healthy
     networks:
       - vostok_net
+    profiles:
+      - gui
+
+  # --------------------------------------------------------------------------
+  # TRAINER - ML Training (RandomForest) - Batch Job
+  # --------------------------------------------------------------------------
+  trainer:
+    build:
+      context: .
+      dockerfile: Dockerfile.trainer
+    container_name: vostok_trainer
+    env_file:
+      - .env
+    environment:
+      DATA_DIR: /app/data
+      MODELS_DIR: /app/models
+    volumes:
+      - ./data:/app/data:ro
+      - ./models:/app/models
+    networks:
+      - vostok_net
+    profiles:
+      - batch
 
 # ============================================================================
-# VOLUMES (Nomeados para evitar problemas de permissão)
+# VOLUMES (Nomeados)
 # ============================================================================
 volumes:
   vostok_redis_data:
