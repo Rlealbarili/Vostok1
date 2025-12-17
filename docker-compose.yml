@@ -133,6 +133,31 @@ services:
     networks:
       - vostok_net
 
+  # --------------------------------------------------------------------------
+  # MONITOR - TUI Dashboard (Rich) - Monitoramento em Tempo Real
+  # --------------------------------------------------------------------------
+  monitor:
+    build:
+      context: .
+      dockerfile: Dockerfile.monitor
+    container_name: vostok_monitor
+    restart: "no"  # Não reiniciar automaticamente (interativo)
+    stdin_open: true
+    tty: true
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      SIGNAL_STREAM: stream:signals:tech
+      DATA_DIR: /app/data
+      TERM: xterm-256color
+    volumes:
+      - ./data:/app/data:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - vostok_net
+
 # ============================================================================
 # VOLUMES (Nomeados para evitar problemas de permissão)
 # ============================================================================

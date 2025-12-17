@@ -1,0 +1,46 @@
+# ============================================================================
+# VOSTOK-1 :: Dockerfile Monitor TUI
+# Dashboard de monitoramento em tempo real
+# ============================================================================
+
+# --- Stage 1: Builder ---
+FROM python:3.11-slim AS builder
+
+WORKDIR /build
+
+# Copiar e instalar requirements
+COPY src/monitor/requirements.txt .
+RUN pip install --no-cache-dir --user -r requirements.txt
+
+# --- Stage 2: Runtime ---
+FROM python:3.11-slim AS runtime
+
+WORKDIR /app
+
+# Copiar dependências do builder
+COPY --from=builder /root/.local /root/.local
+
+# Garantir que os binários estejam no PATH
+ENV PATH=/root/.local/bin:$PATH
+
+# Copiar código fonte
+COPY src/monitor/ ./monitor/
+COPY src/common/ ./common/
+
+# Criar diretório de dados
+RUN mkdir -p /app/data
+
+# Variáveis de ambiente padrão
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    REDIS_HOST=redis \
+    REDIS_PORT=6379 \
+    SIGNAL_STREAM=stream:signals:tech \
+    DATA_DIR=/app/data \
+    TERM=xterm-256color
+
+# Volume para ler dataset em tempo real
+VOLUME ["/app/data"]
+
+# Executar (modo interativo para TUI)
+CMD ["python", "-m", "monitor.main"]
