@@ -1,0 +1,27 @@
+{
+  "precision": 0.3803,
+  "recall": 0.0038,
+  "f1_score": 0.0075,
+  "accuracy": 0.6466,
+  "train_samples": 403156,
+  "test_samples": 100790,
+  "feature_importance": {
+    "cvd": 0.3024,
+    "entropy": 0.2968,
+    "rsi": 0.2051,
+    "volatility_atr": 0.1957,
+    "funding_rate": 0.0
+  },
+  "confusion_matrix": [
+    [
+      65038,
+      220
+    ],
+    [
+      35397,
+      135
+    ]
+  ],
+  "trained_at": "2025-12-17T18:33:56.477587",
+  "model_version": "sniper_v1"
+}

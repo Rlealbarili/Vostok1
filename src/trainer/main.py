@@ -53,7 +53,10 @@ METRICS_FILE = MODELS_DIR / "model_metrics.json"
 
 # Requisitos mínimos
 MIN_SAMPLES = 50
-MIN_PRECISION = 0.5
+MIN_PRECISION = 0.35  # Threshold de qualidade (não aceita spam)
+
+# Threshold de probabilidade para previsão
+PROBA_THRESHOLD = 0.70  # Só considera sinal se confiança > 70% (mais seletivo)
 
 # Features a extrair
 FEATURE_NAMES = [
@@ -167,12 +170,18 @@ def prepare_features(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, list[str
     
     # Criar DataFrame de features
     X_df = pd.DataFrame(feature_data)
-    y = df.loc[valid_indices, 'outcome_label'].values
+    y_series = df.loc[valid_indices, 'outcome_label']
     
-    # Limpeza: remover NaN e infinitos
-    mask = ~(X_df.isna().any(axis=1) | np.isinf(X_df.values).any(axis=1))
-    X_clean = X_df[mask].values
-    y_clean = y[mask]
+    # Limpeza: remover NaN e infinitos de AMBOS X e y
+    y_values = pd.to_numeric(y_series, errors='coerce')
+    valid_mask = (
+        ~X_df.isna().any(axis=1) & 
+        ~np.isinf(X_df.values).any(axis=1) &
+        y_values.notna().values
+    )
+    
+    X_clean = X_df[valid_mask].values
+    y_clean = y_values[valid_mask].values.astype(int)
     
     logger.info(f"📊 Features extraídas: {FEATURE_NAMES}")
     logger.info(f"📊 Amostras válidas após limpeza: {len(X_clean)}")
@@ -215,19 +224,21 @@ def train_model(
     logger.info(f"   - Train: {len(X_train)} amostras")
     logger.info(f"   - Test:  {len(X_test)} amostras")
     
-    # Instanciar modelo
+    # Instanciar modelo - OTIMIZADO PARA IMBALANCE
     model = RandomForestClassifier(
-        n_estimators=100,
-        max_depth=5,           # Evitar overfitting
-        class_weight='balanced',
+        n_estimators=200,              # Mais árvores para estabilidade
+        max_depth=10,                  # Limita profundidade (evitar decorar ruído)
+        min_samples_leaf=50,           # Exige evidência forte
+        class_weight='balanced_subsample',  # Penaliza erros na classe minoritária
         random_state=42,
         n_jobs=-1,
     )
     
-    logger.info("🧠 Treinando RandomForestClassifier...")
-    logger.info(f"   - n_estimators: 100")
-    logger.info(f"   - max_depth: 5")
-    logger.info(f"   - class_weight: balanced")
+    logger.info("🧠 Treinando RandomForestClassifier (Otimizado para Imbalance)...")
+    logger.info(f"   - n_estimators: 200")
+    logger.info(f"   - max_depth: 10")
+    logger.info(f"   - min_samples_leaf: 50")
+    logger.info(f"   - class_weight: balanced_subsample")
     
     # Treinar
     model.fit(X_train, y_train)
@@ -263,9 +274,15 @@ def validate_model(model: RandomForestClassifier, validation_data: dict) -> dict
     y_test = validation_data['y_test']
     feature_names = validation_data['feature_names']
     
-    # Previsões
-    y_pred = model.predict(X_test)
-    y_proba = model.predict_proba(X_test)[:, 1] if len(model.classes_) > 1 else None
+    # Previsões usando THRESHOLD DE PROBABILIDADE (mais seletivo)
+    if len(model.classes_) > 1:
+        y_proba = model.predict_proba(X_test)[:, 1]
+        # Só considera sinal se confiança > PROBA_THRESHOLD
+        y_pred = (y_proba >= PROBA_THRESHOLD).astype(int)
+        logger.info(f"🎚️  Usando threshold de probabilidade: {PROBA_THRESHOLD}")
+    else:
+        y_pred = model.predict(X_test)
+        y_proba = None
     
     # Métricas principais
     precision = precision_score(y_test, y_pred, zero_division=0)

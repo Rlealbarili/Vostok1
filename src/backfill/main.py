@@ -1,8 +1,11 @@
 """
-VOSTOK-1 :: Historical Backfill Module (Time Machine)
-======================================================
-Baixa dados históricos da Binance e gera dataset de treinamento.
-Calcula features idênticas ao Quant e aplica rotulagem Triple Barrier.
+VOSTOK-1 :: Historical Backfill Module (Time Machine) v2.0
+===========================================================
+Triple Barrier Method - Labels Dinâmicos Baseados em Volatilidade (ATR)
+
+MUDANÇA CRÍTICA:
+- Antes: TP/SL fixos (0.5%/0.25%) - Ensinava o modelo a prever sorte
+- Agora: Barreiras dinâmicas baseadas em ATR - Ensina o modelo a ler o mercado
 
 Arquiteto: Petrovich | Operador: Vostok
 Stack: Python 3.11 + ccxt + pandas + ta
@@ -44,14 +47,16 @@ DATA_DIR = Path(os.getenv("DATA_DIR", "./data"))
 TRAINING_DIR = DATA_DIR / "training"
 DATASET_FILE = TRAINING_DIR / "dataset.jsonl"
 
-# Labeling Parameters (Triple Barrier)
-TAKE_PROFIT_PCT = float(os.getenv("TAKE_PROFIT_PCT", 0.5))   # 0.5%
-STOP_LOSS_PCT = float(os.getenv("STOP_LOSS_PCT", 0.25))      # 0.25%
-LOOKAHEAD_BARS = int(os.getenv("LOOKAHEAD_BARS", 30))        # 30 min
+# ============================================================================
+# TRIPLE BARRIER PARAMETERS (ATR-BASED)
+# ============================================================================
+ATR_PERIOD = 14
+ATR_MULTIPLIER_TP = 2.0   # Take Profit = Close + (ATR * 2.0)
+ATR_MULTIPLIER_SL = 1.0   # Stop Loss = Close - (ATR * 1.0) -> R:R 2:1
+LOOKAHEAD_BARS = 45       # 45 minutos de janela
 
 # Feature Engineering
 RSI_PERIOD = 14
-ATR_PERIOD = 14
 MACD_FAST = 12
 MACD_SLOW = 26
 MACD_SIGNAL = 9
@@ -79,7 +84,6 @@ class BinanceFetcher:
         all_ohlcv = []
         since = int((datetime.now(timezone.utc) - timedelta(days=days_back)).timestamp() * 1000)
         
-        # Binance limit = 1000 candles per request
         batch_size = 1000
         
         while True:
@@ -95,13 +99,10 @@ class BinanceFetcher:
                     break
                 
                 all_ohlcv.extend(ohlcv)
-                
-                # Atualizar since para próximo batch
                 since = ohlcv[-1][0] + 1
                 
                 logger.info(f"   → {len(all_ohlcv):,} velas baixadas...")
                 
-                # Verificar se chegamos ao presente
                 if ohlcv[-1][0] >= datetime.now(timezone.utc).timestamp() * 1000 - 60000:
                     break
                 
@@ -113,13 +114,10 @@ class BinanceFetcher:
             logger.error("❌ Nenhuma vela obtida")
             return pd.DataFrame()
         
-        # Criar DataFrame
         df = pd.DataFrame(all_ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms', utc=True)
         df = df.set_index('timestamp')
         df = df.sort_index()
-        
-        # Remover duplicatas
         df = df[~df.index.duplicated(keep='last')]
         
         logger.info(f"✅ Total: {len(df):,} velas ({df.index.min()} a {df.index.max()})")
@@ -127,63 +125,44 @@ class BinanceFetcher:
 
 
 # ============================================================================
-# FEATURE ENGINEERING
+# FEATURE ENGINEERING (ATR-FOCUSED)
 # ============================================================================
 class FeatureEngineer:
-    """Calcula features técnicas idênticas ao Quant."""
+    """Calcula features técnicas com foco em ATR para Triple Barrier."""
 
     @staticmethod
     def calculate_cvd_proxy(df: pd.DataFrame) -> pd.Series:
-        """
-        Aproxima CVD a partir de OHLCV.
-        Lógica: Velas verdes = compra, vermelhas = venda.
-        Magnitude proporcional ao corpo da vela.
-        """
+        """Aproxima CVD a partir de OHLCV."""
         body = df['close'] - df['open']
         range_ = df['high'] - df['low']
-        
-        # Evitar divisão por zero
         range_ = range_.replace(0, np.nan).fillna(1)
-        
-        # CVD = volume * direção normalizada
         direction = body / range_
         cvd_delta = df['volume'] * direction
-        
-        # CVD cumulativo (normalizado)
         cvd = cvd_delta.cumsum()
-        
-        # Normalizar para escala -1 a +1
         cvd_normalized = cvd / (cvd.abs().max() + 1e-10)
-        
         return cvd_normalized
 
     @staticmethod
     def calculate_entropy_proxy(df: pd.DataFrame, window: int = 14) -> pd.Series:
-        """
-        Proxy de entropia usando desvio padrão normalizado.
-        Alta volatilidade = Alto ruído = Alta "entropia".
-        """
+        """Proxy de entropia usando desvio padrão normalizado."""
         returns = df['close'].pct_change()
         volatility = returns.rolling(window=window).std()
-        
-        # Normalizar para 0-1
         entropy = (volatility - volatility.min()) / (volatility.max() - volatility.min() + 1e-10)
-        
         return entropy.fillna(0.5)
 
     def engineer_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Calcula todas as features necessárias."""
-        logger.info("🔧 Calculando features...")
+        """Calcula todas as features necessárias incluindo ATR."""
+        logger.info("🔧 Calculando features (com ATR para Triple Barrier)...")
         
-        # RSI (usando biblioteca ta)
-        df['rsi'] = ta.momentum.RSIIndicator(df['close'], window=RSI_PERIOD).rsi()
-        
-        # ATR (Volatility)
+        # ATR - CRITICAL FOR TRIPLE BARRIER
         atr_indicator = ta.volatility.AverageTrueRange(
             df['high'], df['low'], df['close'], window=ATR_PERIOD
         )
         df['atr'] = atr_indicator.average_true_range()
-        df['volatility_atr'] = df['atr'] / df['close']  # Normalizar pelo preço
+        df['volatility_atr'] = df['atr'] / df['close']  # Normalizado
+        
+        # RSI
+        df['rsi'] = ta.momentum.RSIIndicator(df['close'], window=RSI_PERIOD).rsi()
         
         # MACD
         macd_indicator = ta.trend.MACD(
@@ -198,118 +177,189 @@ class FeatureEngineer:
         # Entropy Proxy
         df['entropy'] = self.calculate_entropy_proxy(df)
         
-        # Funding Rate (não disponível no histórico, usar 0)
+        # Funding Rate (não disponível no histórico)
         df['funding_rate'] = 0.0
         
         logger.info(f"✅ Features calculadas: {len(df):,} linhas")
+        logger.info(f"   ATR médio: {df['atr'].mean():.2f}")
+        logger.info(f"   ATR min/max: {df['atr'].min():.2f} / {df['atr'].max():.2f}")
+        
         return df
 
 
 # ============================================================================
-# LABELER (Triple Barrier)
+# TRIPLE BARRIER LABELER (DYNAMIC ATR-BASED)
 # ============================================================================
 class TripleBarrierLabeler:
-    """Aplica rotulagem Triple Barrier."""
+    """
+    Aplica rotulagem Triple Barrier DINÂMICA baseada em ATR.
+    
+    Conceito:
+    - Teto: Close + (ATR * k_tp)
+    - Chão: Close - (ATR * k_sl)  
+    - Parede Vertical: Time limit (candles)
+    
+    Quem tocar primeiro define o resultado.
+    """
 
     def __init__(
         self,
-        take_profit_pct: float = TAKE_PROFIT_PCT,
-        stop_loss_pct: float = STOP_LOSS_PCT,
+        atr_mult_tp: float = ATR_MULTIPLIER_TP,
+        atr_mult_sl: float = ATR_MULTIPLIER_SL,
         lookahead_bars: int = LOOKAHEAD_BARS
     ) -> None:
-        self.take_profit = take_profit_pct / 100
-        self.stop_loss = stop_loss_pct / 100
+        self.atr_mult_tp = atr_mult_tp
+        self.atr_mult_sl = atr_mult_sl
         self.lookahead = lookahead_bars
+        
+        logger.info(f"🎯 Triple Barrier configurado:")
+        logger.info(f"   - Take Profit: Close + (ATR × {atr_mult_tp})")
+        logger.info(f"   - Stop Loss:   Close - (ATR × {atr_mult_sl})")
+        logger.info(f"   - Time Limit:  {lookahead_bars} candles")
+        logger.info(f"   - Risk:Reward: 1:{atr_mult_tp/atr_mult_sl:.1f}")
 
-    def label_row(self, df: pd.DataFrame, idx: int) -> int | None:
+    def apply_triple_barrier(self, df: pd.DataFrame, idx: int) -> tuple[int | None, float, float]:
         """
-        Rotula uma única linha olhando para o futuro.
-        Returns: 1 (win), 0 (loss), None (lateral/skip)
+        Aplica Triple Barrier para um único candle.
+        
+        Returns:
+            (label, tp_price, sl_price)
+            label: 1=Win (TP hit), 0=Loss (SL hit or Timeout), None=Skip
         """
         if idx + self.lookahead >= len(df):
-            return None
+            return None, 0, 0
         
+        # Preço de entrada
         entry_price = df['close'].iloc[idx]
-        future_prices = df['close'].iloc[idx+1:idx+1+self.lookahead]
+        atr_value = df['atr'].iloc[idx]
         
-        tp_price = entry_price * (1 + self.take_profit)
-        sl_price = entry_price * (1 - self.stop_loss)
+        # Skip se ATR é NaN ou zero
+        if pd.isna(atr_value) or atr_value <= 0:
+            return None, 0, 0
         
-        for price in future_prices:
-            if price >= tp_price:
-                return 1  # Win
-            if price <= sl_price:
-                return 0  # Loss
+        # Barreiras DINÂMICAS baseadas em ATR
+        tp_price = entry_price + (atr_value * self.atr_mult_tp)
+        sl_price = entry_price - (atr_value * self.atr_mult_sl)
         
-        return None  # Lateral (skip)
+        # Olhar para o futuro (próximos N candles)
+        for future_idx in range(idx + 1, idx + 1 + self.lookahead):
+            if future_idx >= len(df):
+                break
+            
+            high = df['high'].iloc[future_idx]
+            low = df['low'].iloc[future_idx]
+            
+            # Verificar qual barreira foi tocada PRIMEIRO
+            # Usamos high/low para ser mais realista (intracandle)
+            
+            hit_tp = high >= tp_price
+            hit_sl = low <= sl_price
+            
+            if hit_tp and hit_sl:
+                # Ambos tocados no mesmo candle - usar close para decidir
+                close = df['close'].iloc[future_idx]
+                if close >= entry_price:
+                    return 1, tp_price, sl_price  # Win
+                else:
+                    return 0, tp_price, sl_price  # Loss
+            elif hit_tp:
+                return 1, tp_price, sl_price  # Win - TP hit first
+            elif hit_sl:
+                return 0, tp_price, sl_price  # Loss - SL hit first
+        
+        # Timeout - nenhuma barreira tocada
+        # Para HFT, ficar preso é ruim -> Label 0
+        return 0, tp_price, sl_price
 
     def label_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Aplica labels a todo o DataFrame."""
-        logger.info(f"🏷️  Aplicando Triple Barrier (TP={TAKE_PROFIT_PCT}%, SL={STOP_LOSS_PCT}%)...")
+        """Aplica Triple Barrier a todo o DataFrame."""
+        logger.info(f"🏷️  Aplicando Triple Barrier Dinâmico (ATR-based)...")
         
         labels = []
+        tp_prices = []
+        sl_prices = []
+        
         for i in range(len(df)):
-            label = self.label_row(df, i)
+            label, tp, sl = self.apply_triple_barrier(df, i)
             labels.append(label)
+            tp_prices.append(tp)
+            sl_prices.append(sl)
             
             if (i + 1) % 10000 == 0:
                 logger.info(f"   → {i+1:,} / {len(df):,} rotulados...")
         
         df['outcome_label'] = labels
+        df['barrier_tp'] = tp_prices
+        df['barrier_sl'] = sl_prices
         
         # Estatísticas
-        labeled = df['outcome_label'].notna().sum()
-        wins = (df['outcome_label'] == 1).sum()
-        losses = (df['outcome_label'] == 0).sum()
+        valid_labels = df['outcome_label'].notna()
+        labeled = valid_labels.sum()
+        wins = (df.loc[valid_labels, 'outcome_label'] == 1).sum()
+        losses = (df.loc[valid_labels, 'outcome_label'] == 0).sum()
         
-        logger.info(f"✅ Rotulagem completa:")
+        win_rate = 100 * wins / labeled if labeled > 0 else 0
+        
+        logger.info(f"✅ Rotulagem Triple Barrier completa:")
         logger.info(f"   → Total rotulado: {labeled:,}")
-        logger.info(f"   → Wins: {wins:,} ({100*wins/labeled:.1f}%)")
-        logger.info(f"   → Losses: {losses:,} ({100*losses/labeled:.1f}%)")
+        logger.info(f"   → Wins (TP hit): {wins:,} ({win_rate:.1f}%)")
+        logger.info(f"   → Losses (SL/Timeout): {losses:,} ({100-win_rate:.1f}%)")
+        
+        # Análise de ATR
+        avg_atr = df.loc[valid_labels, 'atr'].mean()
+        avg_tp_dist = (df.loc[valid_labels, 'barrier_tp'] - df.loc[valid_labels, 'close']).mean()
+        avg_sl_dist = (df.loc[valid_labels, 'close'] - df.loc[valid_labels, 'barrier_sl']).mean()
+        
+        logger.info(f"   → ATR médio: ${avg_atr:.2f}")
+        logger.info(f"   → Distância TP média: ${avg_tp_dist:.2f}")
+        logger.info(f"   → Distância SL média: ${avg_sl_dist:.2f}")
         
         return df
 
 
 # ============================================================================
-# EXPORTER
+# EXPORTER (OVERWRITE MODE)
 # ============================================================================
 class DatasetExporter:
-    """Exporta para formato dataset.jsonl."""
+    """Exporta para formato dataset.jsonl - SOBRESCREVE para limpar labels antigos."""
 
     @staticmethod
-    def export(df: pd.DataFrame, output_path: Path, mode: str = 'a') -> int:
+    def export(df: pd.DataFrame, output_path: Path) -> int:
         """
-        Exporta DataFrame para JSONL no formato do Vostok.
-        Mode: 'a' = append, 'w' = overwrite
+        Exporta DataFrame para JSONL.
+        Mode: 'w' = OVERWRITE (labels antigos estão "sujos")
         """
-        logger.info(f"💾 Exportando para {output_path}...")
+        logger.info(f"💾 Exportando para {output_path} (OVERWRITE mode)...")
         
-        # Filtrar apenas labels válidos
         df_valid = df[df['outcome_label'].notna()].copy()
-        
-        # Garantir diretório existe
         output_path.parent.mkdir(parents=True, exist_ok=True)
         
         count = 0
-        with open(output_path, mode, encoding='utf-8') as f:
+        with open(output_path, 'w', encoding='utf-8') as f:  # OVERWRITE
             for idx, row in df_valid.iterrows():
                 record = {
                     "timestamp": idx.isoformat(),
                     "timestamp_utc": int(idx.timestamp() * 1000),
                     "action": "LONG",
                     "entry_price": float(row['close']),
+                    "barrier_tp": float(row['barrier_tp']),
+                    "barrier_sl": float(row['barrier_sl']),
                     "features": {
                         "rsi": float(row['rsi']) if pd.notna(row['rsi']) else 50.0,
                         "cvd": float(row['cvd']) if pd.notna(row['cvd']) else 0.0,
                         "entropy": float(row['entropy']) if pd.notna(row['entropy']) else 0.5,
                         "volatility_atr": float(row['volatility_atr']) if pd.notna(row['volatility_atr']) else 0.0,
+                        "atr": float(row['atr']) if pd.notna(row['atr']) else 0.0,
                         "funding_rate": float(row['funding_rate']),
                         "macd": float(row['macd']) if pd.notna(row['macd']) else 0.0,
                         "macd_hist": float(row['macd_hist']) if pd.notna(row['macd_hist']) else 0.0,
                     },
                     "outcome_label": int(row['outcome_label']),
-                    "source": "backfill",
-                    "pnl_percent": TAKE_PROFIT_PCT if row['outcome_label'] == 1 else -STOP_LOSS_PCT,
+                    "source": "backfill_triple_barrier_v2",
+                    "labeling_method": "atr_dynamic",
+                    "atr_mult_tp": ATR_MULTIPLIER_TP,
+                    "atr_mult_sl": ATR_MULTIPLIER_SL,
+                    "lookahead_bars": LOOKAHEAD_BARS,
                 }
                 f.write(json.dumps(record) + '\n')
                 count += 1
@@ -322,17 +372,22 @@ class DatasetExporter:
 # MAIN PIPELINE
 # ============================================================================
 def run_backfill() -> None:
-    """Executa o pipeline completo de backfill."""
+    """Executa o pipeline completo de backfill com Triple Barrier."""
     logger.info("")
     logger.info("╔══════════════════════════════════════════════════════════════╗")
-    logger.info("║   VOSTOK-1 :: HISTORICAL BACKFILL (Time Machine)            ║")
-    logger.info("║   Generating Training Dataset from Historical Data          ║")
+    logger.info("║   VOSTOK-1 :: HISTORICAL BACKFILL v2.0 (Triple Barrier)     ║")
+    logger.info("║   Dynamic ATR-Based Labeling for Precision Trading          ║")
     logger.info("╚══════════════════════════════════════════════════════════════╝")
     logger.info("")
     logger.info(f"Symbol: {SYMBOL}")
     logger.info(f"Timeframe: {TIMEFRAME}")
     logger.info(f"Days Back: {DAYS_BACK}")
     logger.info(f"Output: {DATASET_FILE}")
+    logger.info("")
+    logger.info("Triple Barrier Parameters:")
+    logger.info(f"  TP Multiplier: {ATR_MULTIPLIER_TP}x ATR")
+    logger.info(f"  SL Multiplier: {ATR_MULTIPLIER_SL}x ATR")
+    logger.info(f"  Time Limit: {LOOKAHEAD_BARS} candles")
     logger.info("")
     
     # Step 1: Fetch Data
@@ -347,44 +402,48 @@ def run_backfill() -> None:
         logger.error("❌ Sem dados para processar. Abortando.")
         return
     
-    # Step 2: Feature Engineering
+    # Step 2: Feature Engineering (includes ATR)
     logger.info("")
     logger.info("=" * 60)
-    logger.info("STEP 2: FEATURE ENGINEERING")
+    logger.info("STEP 2: FEATURE ENGINEERING (ATR-FOCUSED)")
     logger.info("=" * 60)
     
     engineer = FeatureEngineer()
     df = engineer.engineer_features(df)
     
-    # Step 3: Labeling
+    # Step 3: Triple Barrier Labeling
     logger.info("")
     logger.info("=" * 60)
-    logger.info("STEP 3: TRIPLE BARRIER LABELING")
+    logger.info("STEP 3: TRIPLE BARRIER LABELING (DYNAMIC)")
     logger.info("=" * 60)
     
     labeler = TripleBarrierLabeler()
     df = labeler.label_dataframe(df)
     
-    # Step 4: Export
+    # Step 4: Export (OVERWRITE to clean old labels)
     logger.info("")
     logger.info("=" * 60)
-    logger.info("STEP 4: EXPORTING DATASET")
+    logger.info("STEP 4: EXPORTING DATASET (OVERWRITE)")
     logger.info("=" * 60)
     
     exporter = DatasetExporter()
-    count = exporter.export(df, DATASET_FILE, mode='a')
+    count = exporter.export(df, DATASET_FILE)
     
     # Summary
     logger.info("")
     logger.info("╔══════════════════════════════════════════════════════════════╗")
-    logger.info("║                    BACKFILL COMPLETE!                        ║")
+    logger.info("║           TRIPLE BARRIER BACKFILL COMPLETE!                 ║")
     logger.info("╚══════════════════════════════════════════════════════════════╝")
     logger.info(f"📊 Records exported: {count:,}")
     logger.info(f"📁 Dataset file: {DATASET_FILE}")
     logger.info("")
+    logger.info("🎯 Labels agora são DINÂMICOS baseados em volatilidade!")
+    logger.info("   - Alta volatilidade = Barreiras largas")
+    logger.info("   - Baixa volatilidade = Barreiras curtas")
+    logger.info("")
     logger.info("Next steps:")
     logger.info("  1. Run trainer: docker compose run --rm trainer")
-    logger.info("  2. Check model: ls -la models/")
+    logger.info("  2. Check metrics (expect better precision!)")
     logger.info("")
 
 
