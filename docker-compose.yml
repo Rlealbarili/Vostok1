@@ -185,6 +185,7 @@ services:
 
   # --------------------------------------------------------------------------
   # LLM ENGINE - Ollama (Local LLM for Sentiment Analysis)
+  # GPU 0 = Dedicada/Livre | GPU 1 = Desktop (ocupada)
   # --------------------------------------------------------------------------
   llm_engine:
     image: ollama/ollama:latest
@@ -195,16 +196,17 @@ services:
     volumes:
       - ollama_data:/root/.ollama
     environment:
-      OLLAMA_HOST: 0.0.0.0
+      - OLLAMA_HOST=0.0.0.0
+      - OLLAMA_KEEP_ALIVE=24h
     networks:
       - vostok_net
-    # GPU Support (optional - comment out if CPU-only)
+    # GPU Support - TRAVADO NA GPU 0 (livre)
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
-              count: all
+              device_ids: ['0']
               capabilities: [gpu]
     # Healthcheck
     healthcheck:
