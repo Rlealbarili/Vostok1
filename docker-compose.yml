@@ -128,10 +128,41 @@ services:
       DATA_DIR: /app/data
     volumes:
       - ./data/training:/app/data/training
+      - ./models:/app/models:ro
     depends_on:
       redis:
         condition: service_healthy
       quant:
+        condition: service_started
+    networks:
+      - vostok_net
+
+  # --------------------------------------------------------------------------
+  # EXECUTION - Paper Trading Engine (Position Management)
+  # --------------------------------------------------------------------------
+  execution:
+    build:
+      context: .
+      dockerfile: Dockerfile.execution
+    container_name: vostok_execution
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      ORDER_STREAM: stream:orders:execute
+      PRICE_STREAM: stream:signals:live
+      STATUS_STREAM: stream:execution:status
+      CONSUMER_GROUP: execution_group
+      CONSUMER_NAME: executor_1
+      DATA_DIR: /app/data
+    volumes:
+      - ./data/logs:/app/data/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+      decision:
         condition: service_started
     networks:
       - vostok_net
