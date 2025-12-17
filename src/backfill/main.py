@@ -5,7 +5,7 @@ Baixa dados históricos da Binance e gera dataset de treinamento.
 Calcula features idênticas ao Quant e aplica rotulagem Triple Barrier.
 
 Arquiteto: Petrovich | Operador: Vostok
-Stack: Python 3.11 + ccxt + pandas + pandas_ta
+Stack: Python 3.11 + ccxt + pandas + ta
 """
 
 import json
@@ -19,7 +19,7 @@ from typing import Any
 import ccxt
 import numpy as np
 import pandas as pd
-import pandas_ta as ta
+import ta
 
 # ============================================================================
 # CONFIGURAÇÃO DE LOGGING
@@ -175,21 +175,22 @@ class FeatureEngineer:
         """Calcula todas as features necessárias."""
         logger.info("🔧 Calculando features...")
         
-        # RSI
-        df['rsi'] = ta.rsi(df['close'], length=RSI_PERIOD)
+        # RSI (usando biblioteca ta)
+        df['rsi'] = ta.momentum.RSIIndicator(df['close'], window=RSI_PERIOD).rsi()
         
         # ATR (Volatility)
-        df['atr'] = ta.atr(df['high'], df['low'], df['close'], length=ATR_PERIOD)
+        atr_indicator = ta.volatility.AverageTrueRange(
+            df['high'], df['low'], df['close'], window=ATR_PERIOD
+        )
+        df['atr'] = atr_indicator.average_true_range()
         df['volatility_atr'] = df['atr'] / df['close']  # Normalizar pelo preço
         
         # MACD
-        macd = ta.macd(df['close'], fast=MACD_FAST, slow=MACD_SLOW, signal=MACD_SIGNAL)
-        if macd is not None:
-            df['macd'] = macd.iloc[:, 0]  # MACD line
-            df['macd_hist'] = macd.iloc[:, 2]  # Histogram
-        else:
-            df['macd'] = 0
-            df['macd_hist'] = 0
+        macd_indicator = ta.trend.MACD(
+            df['close'], window_slow=MACD_SLOW, window_fast=MACD_FAST, window_sign=MACD_SIGNAL
+        )
+        df['macd'] = macd_indicator.macd()
+        df['macd_hist'] = macd_indicator.macd_diff()
         
         # CVD Proxy
         df['cvd'] = self.calculate_cvd_proxy(df)
