@@ -1,5 +1,6 @@
 # VOSTOK-1 :: Sentiment Analysis Dependencies
-# Ollama LLM Integration for Crypto Sentiment
+# RSS Feed Parser + Ollama LLM Integration
 
+feedparser>=6.0.0
 requests>=2.31.0
 redis>=5.0.0

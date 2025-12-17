@@ -1,11 +1,11 @@
 """
-VOSTOK-1 :: Sentiment Analysis Module
-======================================
-Análise de sentimento de notícias cripto usando LLM local (Ollama/Qwen).
+VOSTOK-1 :: Sentiment Analysis Module (RSS Edition)
+=====================================================
+Análise de sentimento de notícias cripto usando RSS Feeds + LLM local.
 Publica scores no Redis Stream para integração com Decision Engine.
 
 Arquiteto: Petrovich | Operador: Vostok
-Stack: Python 3.11 + Ollama + Redis
+Stack: Python 3.11 + feedparser + Ollama + Redis
 """
 
 import asyncio
@@ -18,6 +18,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
+import feedparser
 import redis.asyncio as aioredis
 import requests
 
@@ -45,12 +46,16 @@ OLLAMA_PORT = int(os.getenv("OLLAMA_PORT", 11434))
 OLLAMA_URL = f"http://{OLLAMA_HOST}:{OLLAMA_PORT}/api/generate"
 MODEL_NAME = os.getenv("LLM_MODEL", "qwen2.5:7b-instruct")
 
-# News API
-CRYPTOPANIC_API_KEY = os.getenv("CRYPTOPANIC_API_KEY", "")
-CRYPTOPANIC_URL = "https://cryptopanic.com/api/v1/posts/"
+# RSS Feeds Configuration
+RSS_FEEDS = [
+    "https://cryptopanic.com/news/rss/",
+    "https://cointelegraph.com/rss",
+    "https://www.coindesk.com/arc/outboundfeeds/rss/",
+]
 
 # Timing
 ANALYSIS_INTERVAL = int(os.getenv("ANALYSIS_INTERVAL", 900))  # 15 min default
+MAX_HEADLINES = 10
 
 # ============================================================================
 # SYSTEM PROMPT - A DOUTRINA (Elite Hedge Fund Analyst)
@@ -64,7 +69,7 @@ RULES:
 2. WEIGH REGULATION: SEC/Gov/CFTC news has 2x weight on sentiment.
 3. DETECT INSTITUTIONAL FLOW: BlackRock/Fidelity/ETF news is High Impact.
 4. PRIORITIZE FACTS: On-chain data > Rumors. Exchange flows > Twitter.
-5. TIME SENSITIVITY: News older than 1h = reduced impact.
+5. TIME SENSITIVITY: Focus on actionable, recent news.
 
 SCORING SCALE:
 - Strong Bullish: +0.8 to +1.0 (ETF approval, major adoption)
@@ -78,60 +83,76 @@ OUTPUT FORMAT: JSON ONLY, no explanation, no markdown:
 
 
 # ============================================================================
-# MOCK NEWS DATA (Fallback when no API key)
+# RSS NEWS FETCHER
 # ============================================================================
-MOCK_HEADLINES = [
-    "Bitcoin holds steady above $85,000 amid market uncertainty",
-    "SEC Commissioner hints at clearer crypto regulations in 2025",
-    "BlackRock Bitcoin ETF sees record inflows of $500M",
-    "Whale alert: 10,000 BTC moved from exchange to cold wallet",
-    "Federal Reserve maintains interest rates, crypto markets react",
-]
+class RSSNewsFetcher:
+    """Busca notícias de cripto via RSS feeds públicos."""
 
+    def __init__(self, feeds: list[str]) -> None:
+        self.feeds = feeds
+        self.last_fetch_count = 0
 
-# ============================================================================
-# NEWS FETCHER
-# ============================================================================
-class NewsFetcher:
-    """Busca notícias de cripto de fontes externas."""
-
-    def __init__(self, api_key: str = "") -> None:
-        self.api_key = api_key
-        self.session = requests.Session()
-        self.session.timeout = 10
-
-    def fetch_headlines(self, limit: int = 5) -> list[str]:
+    def fetch_headlines(self, limit: int = MAX_HEADLINES) -> list[str]:
         """
-        Busca headlines recentes.
-        Retorna mock data se não houver API key.
+        Busca headlines de múltiplos RSS feeds.
+        Retorna lista de títulos únicos.
         """
-        if not self.api_key:
-            logger.info("📰 Usando mock headlines (sem API key)")
-            return MOCK_HEADLINES[:limit]
+        all_headlines: list[str] = []
+        
+        for feed_url in self.feeds:
+            try:
+                headlines = self._fetch_single_feed(feed_url, limit=5)
+                all_headlines.extend(headlines)
+                logger.info(f"📰 {len(headlines)} headlines de {self._get_feed_name(feed_url)}")
+            except Exception as e:
+                logger.warning(f"⚠️  Erro no feed {feed_url}: {e}")
+                continue
+        
+        # Remover duplicatas e limitar
+        unique_headlines = list(dict.fromkeys(all_headlines))[:limit]
+        self.last_fetch_count = len(unique_headlines)
+        
+        if not unique_headlines:
+            logger.warning("⚠️  Nenhuma headline obtida dos feeds RSS")
+        
+        return unique_headlines
 
-        try:
-            params = {
-                "auth_token": self.api_key,
-                "currencies": "BTC",
-                "kind": "news",
-                "filter": "important",
-                "public": "true",
-            }
-            
-            response = self.session.get(CRYPTOPANIC_URL, params=params)
-            response.raise_for_status()
-            
-            data = response.json()
-            results = data.get("results", [])
-            
-            headlines = [item.get("title", "") for item in results[:limit]]
-            logger.info(f"📰 {len(headlines)} headlines fetched from CryptoPanic")
-            
-            return headlines if headlines else MOCK_HEADLINES[:limit]
-            
-        except Exception as e:
-            logger.warning(f"⚠️  Erro ao buscar notícias: {e}")
-            return MOCK_HEADLINES[:limit]
+    def _fetch_single_feed(self, url: str, limit: int = 5) -> list[str]:
+        """Busca headlines de um único feed RSS."""
+        feed = feedparser.parse(url)
+        
+        if feed.bozo and feed.bozo_exception:
+            raise Exception(f"Feed malformado: {feed.bozo_exception}")
+        
+        headlines = []
+        for entry in feed.entries[:limit]:
+            title = entry.get('title', '').strip()
+            if title and len(title) > 10:
+                # Limpar caracteres especiais
+                title = self._clean_title(title)
+                headlines.append(title)
+        
+        return headlines
+
+    def _clean_title(self, title: str) -> str:
+        """Remove caracteres especiais e HTML tags."""
+        # Remove HTML tags
+        title = re.sub(r'<[^>]+>', '', title)
+        # Remove múltiplos espaços
+        title = re.sub(r'\s+', ' ', title)
+        # Remove caracteres não-ASCII problemáticos
+        title = title.encode('ascii', 'ignore').decode('ascii')
+        return title.strip()
+
+    def _get_feed_name(self, url: str) -> str:
+        """Extrai nome amigável do feed a partir da URL."""
+        if 'cryptopanic' in url:
+            return 'CryptoPanic'
+        elif 'cointelegraph' in url:
+            return 'CoinTelegraph'
+        elif 'coindesk' in url:
+            return 'CoinDesk'
+        return url.split('/')[2]
 
 
 # ============================================================================
@@ -155,7 +176,7 @@ class LLMAnalyzer:
         # Formatar headlines para análise
         headlines_text = "\n".join([f"- {h}" for h in headlines])
         
-        prompt = f"""Analyze these Bitcoin news headlines and provide sentiment:
+        prompt = f"""Analyze these Bitcoin/Crypto news headlines and provide sentiment:
 
 {headlines_text}
 
@@ -227,7 +248,7 @@ class SentimentProcessor:
 
     def __init__(self) -> None:
         self.redis: aioredis.Redis | None = None
-        self.news_fetcher = NewsFetcher(CRYPTOPANIC_API_KEY)
+        self.news_fetcher = RSSNewsFetcher(RSS_FEEDS)
         self.analyzer = LLMAnalyzer()
         self.running = False
         self.analyses_done = 0
@@ -248,7 +269,8 @@ class SentimentProcessor:
             "summary": str(analysis.get("summary", "")),
             "confidence": str(analysis.get("confidence", 0.5)),
             "model": MODEL_NAME,
-            "source": "ollama",
+            "source": "rss",
+            "headlines_count": str(self.news_fetcher.last_fetch_count),
         }
         
         await self.redis.xadd(SENTIMENT_STREAM, payload, maxlen=1000)
@@ -269,15 +291,16 @@ class SentimentProcessor:
         logger.info("=" * 60)
         logger.info("🔄 Iniciando ciclo de análise de sentimento...")
         
-        # Buscar headlines
-        headlines = self.news_fetcher.fetch_headlines(limit=5)
+        # Buscar headlines via RSS
+        headlines = self.news_fetcher.fetch_headlines(limit=MAX_HEADLINES)
         
         if not headlines:
-            logger.warning("⚠️  Nenhuma headline disponível")
+            logger.warning("⚠️  Nenhuma headline disponível. Tentando no próximo ciclo.")
             return
         
-        for h in headlines:
-            logger.info(f"   📰 {h[:60]}...")
+        logger.info(f"📰 Total: {len(headlines)} headlines únicas")
+        for h in headlines[:5]:  # Mostrar apenas as 5 primeiras
+            logger.info(f"   • {h[:60]}...")
         
         # Analisar com LLM
         analysis = self.analyzer.analyze(headlines)
@@ -303,11 +326,14 @@ class SentimentProcessor:
         """Inicia o processador."""
         logger.info("")
         logger.info("╔══════════════════════════════════════════════════════════════╗")
-        logger.info("║   VOSTOK-1 :: SENTIMENT ANALYSIS MODULE                     ║")
+        logger.info("║   VOSTOK-1 :: SENTIMENT ANALYSIS MODULE (RSS Edition)       ║")
         logger.info("║   Elite Crypto Market Analyst (Hedge Fund Tier)             ║")
         logger.info("╚══════════════════════════════════════════════════════════════╝")
         logger.info("")
         logger.info(f"LLM: {MODEL_NAME} @ {OLLAMA_URL}")
+        logger.info(f"RSS Feeds: {len(RSS_FEEDS)} sources")
+        for feed in RSS_FEEDS:
+            logger.info(f"   • {feed}")
         logger.info(f"Output Stream: {SENTIMENT_STREAM}")
         logger.info(f"Analysis Interval: {ANALYSIS_INTERVAL}s ({ANALYSIS_INTERVAL // 60} min)")
         logger.info("")

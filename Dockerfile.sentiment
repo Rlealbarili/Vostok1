@@ -1,6 +1,6 @@
 # ============================================================================
-# VOSTOK-1 :: Dockerfile for Sentiment Analysis Module
-# Ollama LLM Integration for Crypto Market Sentiment
+# VOSTOK-1 :: Dockerfile for Sentiment Analysis Module (RSS Edition)
+# FeedParser + Ollama LLM Integration for Crypto Market Sentiment
 # ============================================================================
 
 # --- Stage 1: Builder ---
@@ -17,8 +17,8 @@ FROM python:3.11-slim AS runtime
 
 # Metadados
 LABEL maintainer="Vostok Team"
-LABEL description="VOSTOK-1 Sentiment Analysis - Ollama LLM Integration"
-LABEL version="1.0"
+LABEL description="VOSTOK-1 Sentiment Analysis - RSS + Ollama LLM Integration"
+LABEL version="2.0"
 
 WORKDIR /app
 
