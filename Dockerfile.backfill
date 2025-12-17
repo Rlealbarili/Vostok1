@@ -1,0 +1,47 @@
+# ============================================================================
+# VOSTOK-1 :: Dockerfile for Backfill Module (Time Machine)
+# Historical Data Fetcher + Feature Engineering + Labeling
+# ============================================================================
+
+# --- Stage 1: Builder ---
+FROM python:3.11-slim AS builder
+
+WORKDIR /build
+
+# Instalar dependências Python
+COPY src/backfill/requirements.txt .
+RUN pip install --no-cache-dir --user -r requirements.txt
+
+# --- Stage 2: Runtime ---
+FROM python:3.11-slim AS runtime
+
+# Metadados
+LABEL maintainer="Vostok Team"
+LABEL description="VOSTOK-1 Backfill - Historical Data Fetcher"
+LABEL version="1.0"
+
+WORKDIR /app
+
+# Copiar dependências do builder
+COPY --from=builder /root/.local /root/.local
+
+# Copiar código fonte
+COPY src/backfill/ ./backfill/
+COPY src/common/ ./common/
+
+# Criar diretórios de dados
+RUN mkdir -p /app/data/training
+
+# Ajustar PATH
+ENV PATH=/root/.local/bin:$PATH
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+# Variáveis padrão
+ENV SYMBOL=BTC/USDT
+ENV TIMEFRAME=1m
+ENV DAYS_BACK=90
+ENV DATA_DIR=/app/data
+
+# Comando de execução
+CMD ["python", "-m", "backfill.main"]

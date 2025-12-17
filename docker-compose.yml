@@ -184,6 +184,28 @@ services:
       - vostok_net
 
   # --------------------------------------------------------------------------
+  # BACKFILL - Historical Data Fetcher (Time Machine)
+  # --------------------------------------------------------------------------
+  backfill:
+    build:
+      context: .
+      dockerfile: Dockerfile.backfill
+    container_name: vostok_backfill
+    env_file:
+      - .env
+    environment:
+      SYMBOL: ${SYMBOL:-BTC/USDT}
+      TIMEFRAME: 1m
+      DAYS_BACK: ${DAYS_BACK:-90}
+      DATA_DIR: /app/data
+      TAKE_PROFIT_PCT: 0.5
+      STOP_LOSS_PCT: 0.25
+    volumes:
+      - ./data/training:/app/data/training
+    networks:
+      - vostok_net
+
+  # --------------------------------------------------------------------------
   # SENTIMENT - LLM-Powered News Sentiment Analysis
   # --------------------------------------------------------------------------
   sentiment:

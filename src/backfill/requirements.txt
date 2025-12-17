@@ -1,0 +1,7 @@
+# VOSTOK-1 :: Backfill Dependencies
+# Historical Data Fetcher + Feature Engineering
+
+ccxt>=4.0.0
+pandas>=2.0.0
+pandas_ta>=0.3.14b0
+numpy>=1.24.0
