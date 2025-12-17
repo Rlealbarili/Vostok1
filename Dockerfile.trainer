@@ -1,6 +1,6 @@
 # ============================================================================
-# VOSTOK-1 :: Dockerfile Trainer (ML Training)
-# Batch job para treinamento de modelo RandomForest
+# VOSTOK-1 :: Dockerfile for Model Trainer
+# Random Forest Meta-Labeling Pipeline
 # ============================================================================
 
 # --- Stage 1: Builder ---
@@ -8,41 +8,37 @@ FROM python:3.11-slim AS builder
 
 WORKDIR /build
 
-# Instalar dependências de build
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copiar e instalar requirements
+# Instalar dependências Python
 COPY src/trainer/requirements.txt .
 RUN pip install --no-cache-dir --user -r requirements.txt
 
 # --- Stage 2: Runtime ---
 FROM python:3.11-slim AS runtime
 
+# Metadados
+LABEL maintainer="Vostok Team"
+LABEL description="VOSTOK-1 Model Trainer - Random Forest Meta-Labeling"
+LABEL version="1.0"
+
 WORKDIR /app
 
 # Copiar dependências do builder
 COPY --from=builder /root/.local /root/.local
 
-# Garantir que os binários estejam no PATH
-ENV PATH=/root/.local/bin:$PATH
-
 # Copiar código fonte
 COPY src/trainer/ ./trainer/
 COPY src/common/ ./common/
 
-# Criar diretórios
-RUN mkdir -p /app/data /app/models
+# Garantir diretórios existem
+RUN mkdir -p /app/data/training /app/models
 
-# Variáveis de ambiente padrão
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    DATA_DIR=/app/data \
-    MODELS_DIR=/app/models
+# Ajustar PATH
+ENV PATH=/root/.local/bin:$PATH
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
 
-# Volumes
-VOLUME ["/app/data", "/app/models"]
+# Volumes para dados e modelos
+VOLUME ["/app/data/training", "/app/models"]
 
-# Executar
+# Comando de execução
 CMD ["python", "-m", "trainer.main"]
