@@ -56,7 +56,7 @@ MIN_SAMPLES = 50
 MIN_PRECISION = 0.35  # Threshold de qualidade (não aceita spam)
 
 # Threshold de probabilidade para previsão
-PROBA_THRESHOLD = 0.70  # Só considera sinal se confiança > 70% (mais seletivo)
+PROBA_THRESHOLD = 0.52  # Ajustado para class_weight balanced (>50% já é sinal forte)
 
 # Features a extrair
 FEATURE_NAMES = [
@@ -64,7 +64,7 @@ FEATURE_NAMES = [
     "cvd",
     "entropy",
     "volatility_atr",
-    "funding_rate",
+    # "funding_rate" removido - feature morta (0% importância no backfill)
 ]
 
 
@@ -229,7 +229,7 @@ def train_model(
         n_estimators=200,              # Mais árvores para estabilidade
         max_depth=10,                  # Limita profundidade (evitar decorar ruído)
         min_samples_leaf=50,           # Exige evidência forte
-        class_weight='balanced_subsample',  # Penaliza erros na classe minoritária
+        class_weight='balanced',       # Força equilíbrio entre classes
         random_state=42,
         n_jobs=-1,
     )
@@ -238,7 +238,7 @@ def train_model(
     logger.info(f"   - n_estimators: 200")
     logger.info(f"   - max_depth: 10")
     logger.info(f"   - min_samples_leaf: 50")
-    logger.info(f"   - class_weight: balanced_subsample")
+    logger.info(f"   - class_weight: balanced")
     
     # Treinar
     model.fit(X_train, y_train)

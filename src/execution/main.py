@@ -48,6 +48,11 @@ STATUS_STREAM = os.getenv("STATUS_STREAM", "stream:execution:status")
 CONSUMER_GROUP = os.getenv("CONSUMER_GROUP", "execution_group")
 CONSUMER_NAME = os.getenv("CONSUMER_NAME", "executor_1")
 
+# Paper Trading Bankroll Management
+INITIAL_BALANCE = float(os.getenv("PAPER_INITIAL_BALANCE", 200.0))
+LEVERAGE = int(os.getenv("LEVERAGE", 1))
+ORDER_SIZE_PCT = float(os.getenv("ORDER_SIZE_PCT", 0.95))
+
 # Paths
 DATA_DIR = Path(os.getenv("DATA_DIR", "/app/data"))
 LOGS_DIR = DATA_DIR / "logs"
@@ -80,12 +85,15 @@ class PaperTrade:
     sl_price: float
     confidence: float
     atr: float
+    position_size: float     # Tamanho da posição em USD
     
     # Preenchidos no fechamento
     exit_time: int | None = None
     exit_price: float | None = None
     exit_reason: ExitReason | None = None
     pnl_percent: float | None = None
+    pnl_usd: float | None = None
+    balance_after: float | None = None
 
     def check_exit(self, current_price: float, current_time: int) -> ExitReason | None:
         """Verifica condições de saída."""
@@ -103,12 +111,19 @@ class PaperTrade:
         
         return None
 
-    def close(self, exit_price: float, exit_time: int, reason: ExitReason) -> None:
-        """Fecha o trade."""
+    def close(self, exit_price: float, exit_time: int, reason: ExitReason, current_balance: float) -> float:
+        """Fecha o trade e retorna o novo saldo."""
         self.exit_price = exit_price
         self.exit_time = exit_time
         self.exit_reason = reason
         self.pnl_percent = ((exit_price - self.entry_price) / self.entry_price) * 100
+        
+        # Calcular PnL em USD baseado no position size com alavancagem
+        qty = (self.position_size * LEVERAGE) / self.entry_price
+        self.pnl_usd = (exit_price - self.entry_price) * qty
+        self.balance_after = current_balance + self.pnl_usd
+        
+        return self.balance_after
 
 
 # ============================================================================
@@ -130,7 +145,8 @@ class TradeLogger:
                 writer.writerow([
                     'timestamp', 'entry_time', 'exit_time', 'duration_min',
                     'signal_confidence', 'entry', 'exit', 'tp', 'sl',
-                    'result_pct', 'outcome', 'atr'
+                    'result_pct', 'result_usd', 'balance_after', 'position_size',
+                    'outcome', 'atr'
                 ])
             logger.info(f"📁 Trade log initialized: {self.filepath}")
 
@@ -149,6 +165,9 @@ class TradeLogger:
             round(trade.tp_price, 2),
             round(trade.sl_price, 2),
             round(trade.pnl_percent, 4) if trade.pnl_percent else None,
+            round(trade.pnl_usd, 2) if trade.pnl_usd else None,
+            round(trade.balance_after, 2) if trade.balance_after else None,
+            round(trade.position_size, 2),
             trade.exit_reason.value if trade.exit_reason else None,
             round(trade.atr, 2),
         ]
@@ -180,11 +199,18 @@ class ExecutionEngine:
         self.trade_logger = TradeLogger()
         self.running = False
         
+        # Bankroll Management
+        self.initial_balance = INITIAL_BALANCE
+        self.current_balance = INITIAL_BALANCE
+        self.leverage = LEVERAGE
+        self.order_size_pct = ORDER_SIZE_PCT
+        
         # Estatísticas
         self.total_trades = 0
         self.wins = 0
         self.losses = 0
         self.total_pnl = 0.0
+        self.total_pnl_usd = 0.0
 
     async def connect_redis(self) -> None:
         """Conecta ao Redis."""
@@ -222,6 +248,9 @@ class ExecutionEngine:
                 logger.warning("Preço de entrada inválido")
                 return
             
+            # Calcular position size baseado na banca atual
+            position_size = self.current_balance * self.order_size_pct
+            
             self.current_trade = PaperTrade(
                 entry_time=timestamp or int(datetime.now(timezone.utc).timestamp() * 1000),
                 entry_price=entry_price,
@@ -229,14 +258,16 @@ class ExecutionEngine:
                 sl_price=sl_price,
                 confidence=confidence,
                 atr=atr,
+                position_size=position_size,
             )
             
             self.status = TradeStatus.IN_TRADE
             self.current_price = entry_price
             
             logger.info(
-                f"🔵 PAPER TRADE OPENED @ {entry_price:.2f} | "
-                f"TP: {tp_price:.2f} | SL: {sl_price:.2f} | "
+                f"🟢 PAPER TRADE OPENED @ ${entry_price:.2f} | "
+                f"Size: ${position_size:.2f} (x{self.leverage}) | "
+                f"TP: ${tp_price:.2f} | SL: ${sl_price:.2f} | "
                 f"Conf: {confidence:.2%}"
             )
             
@@ -249,30 +280,38 @@ class ExecutionEngine:
             return
         
         exit_time = int(datetime.now(timezone.utc).timestamp() * 1000)
-        self.current_trade.close(self.current_price, exit_time, reason)
+        new_balance = self.current_trade.close(
+            self.current_price, exit_time, reason, self.current_balance
+        )
+        
+        # Atualizar saldo
+        pnl_usd = self.current_trade.pnl_usd or 0
+        self.current_balance = new_balance
         
         # Estatísticas
         self.total_trades += 1
         pnl = self.current_trade.pnl_percent or 0
         self.total_pnl += pnl
+        self.total_pnl_usd += pnl_usd
         
         if reason == ExitReason.TP:
             self.wins += 1
             emoji = "🟢"
-            msg = f"TAKE PROFIT HIT (+{pnl:.2f}%)"
+            msg = f"TAKE PROFIT HIT (+{pnl:.2f}% / +${pnl_usd:.2f})"
         elif reason == ExitReason.SL:
             self.losses += 1
             emoji = "🔴"
-            msg = f"STOP LOSS HIT ({pnl:.2f}%)"
+            msg = f"STOP LOSS HIT ({pnl:.2f}% / ${pnl_usd:.2f})"
         else:
             self.losses += 1
             emoji = "⚪"
-            msg = f"TIMEOUT EXIT ({pnl:.2f}%)"
+            msg = f"TIMEOUT EXIT ({pnl:.2f}% / ${pnl_usd:.2f})"
         
         logger.info(
             f"{emoji} {msg} | "
-            f"Entry: {self.current_trade.entry_price:.2f} → Exit: {self.current_price:.2f} | "
-            f"Total Trades: {self.total_trades} | Win Rate: {self.win_rate:.1f}%"
+            f"Entry: ${self.current_trade.entry_price:.2f} → Exit: ${self.current_price:.2f} | "
+            f"Balance: ${self.current_balance:.2f} | "
+            f"Win Rate: {self.win_rate:.1f}%"
         )
         
         # Persistir
@@ -297,20 +336,33 @@ class ExecutionEngine:
         return ((self.current_price - self.current_trade.entry_price) / 
                 self.current_trade.entry_price) * 100
 
+    @property
+    def current_pnl_usd(self) -> float:
+        """Calcula PnL atual em USD do trade aberto."""
+        if not self.current_trade or self.current_price <= 0:
+            return 0.0
+        qty = (self.current_trade.position_size * self.leverage) / self.current_trade.entry_price
+        return (self.current_price - self.current_trade.entry_price) * qty
+
     async def publish_status(self) -> None:
         """Publica status atual no Redis."""
         status_data = {
             "status": self.status.value,
             "pnl_pct": str(round(self.current_pnl_percent, 4)),
+            "pnl_usd": str(round(self.current_pnl_usd, 2)),
             "entry": str(round(self.current_trade.entry_price, 2)) if self.current_trade else "0",
             "current": str(round(self.current_price, 2)),
             "tp": str(round(self.current_trade.tp_price, 2)) if self.current_trade else "0",
             "sl": str(round(self.current_trade.sl_price, 2)) if self.current_trade else "0",
+            "position_size": str(round(self.current_trade.position_size, 2)) if self.current_trade else "0",
+            "initial_balance": str(round(self.initial_balance, 2)),
+            "current_balance": str(round(self.current_balance, 2)),
             "total_trades": str(self.total_trades),
             "wins": str(self.wins),
             "losses": str(self.losses),
             "win_rate": str(round(self.win_rate, 2)),
             "total_pnl": str(round(self.total_pnl, 4)),
+            "total_pnl_usd": str(round(self.total_pnl_usd, 2)),
             "timestamp": str(int(datetime.now(timezone.utc).timestamp() * 1000)),
         }
         
@@ -407,6 +459,10 @@ class ExecutionEngine:
         logger.info("=" * 60)
         logger.info("VOSTOK-1 :: Execution Engine (Paper Trading)")
         logger.info("=" * 60)
+        logger.info(f"💰 Initial Balance: ${self.initial_balance:.2f}")
+        logger.info(f"📊 Leverage: {self.leverage}x")
+        logger.info(f"📏 Order Size: {self.order_size_pct * 100:.0f}% of balance")
+        logger.info("-" * 60)
         logger.info(f"Order Stream: {ORDER_STREAM}")
         logger.info(f"Price Stream: {PRICE_STREAM}")
         logger.info(f"Status Stream: {STATUS_STREAM}")

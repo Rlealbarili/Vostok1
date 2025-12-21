@@ -14,16 +14,13 @@ services:
     ports:
       - "6379:6379"
     command: >
-      redis-server 
-      --appendonly yes 
-      --maxmemory 512mb 
-      --maxmemory-policy allkeys-lru
+      redis-server  --appendonly yes  --maxmemory 512mb  --maxmemory-policy allkeys-lru
     volumes:
       - vostok_redis_data:/data
     networks:
       - vostok_net
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: [ "CMD", "redis-cli", "ping" ]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -49,7 +46,7 @@ services:
     networks:
       - vostok_net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U vostok -d vostok_trading"]
+      test: [ "CMD-SHELL", "pg_isready -U vostok -d vostok_trading" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -157,6 +154,10 @@ services:
       CONSUMER_GROUP: execution_group
       CONSUMER_NAME: executor_1
       DATA_DIR: /app/data
+      # Paper Trading Bankroll
+      PAPER_INITIAL_BALANCE: ${PAPER_INITIAL_BALANCE:-200.0}
+      LEVERAGE: ${LEVERAGE:-1}
+      ORDER_SIZE_PCT: ${ORDER_SIZE_PCT:-0.95}
     volumes:
       - ./data/logs:/app/data/logs
     depends_on:
@@ -227,7 +228,7 @@ services:
     environment:
       SYMBOL: ${SYMBOL:-BTC/USDT}
       TIMEFRAME: 1m
-      DAYS_BACK: ${DAYS_BACK:-90}
+      DAYS_BACK: ${DAYS_BACK:-365}
       DATA_DIR: /app/data
       TAKE_PROFIT_PCT: 0.5
       STOP_LOSS_PCT: 0.25
@@ -286,11 +287,11 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ['0']
-              capabilities: [gpu]
+              device_ids: [ '0' ]
+              capabilities: [ gpu ]
     # Healthcheck usando ollama list (não precisa de curl)
     healthcheck:
-      test: ["CMD-SHELL", "ollama list || exit 1"]
+      test: [ "CMD-SHELL", "ollama list || exit 1" ]
       interval: 30s
       timeout: 15s
       retries: 5

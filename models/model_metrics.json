@@ -1,27 +1,26 @@
 {
-  "precision": 0.3803,
-  "recall": 0.0038,
-  "f1_score": 0.0075,
-  "accuracy": 0.6466,
-  "train_samples": 403156,
-  "test_samples": 100790,
+  "precision": 0.3595,
+  "recall": 0.5377,
+  "f1_score": 0.4309,
+  "accuracy": 0.4985,
+  "train_samples": 420436,
+  "test_samples": 105110,
   "feature_importance": {
-    "cvd": 0.3024,
-    "entropy": 0.2968,
-    "rsi": 0.2051,
-    "volatility_atr": 0.1957,
-    "funding_rate": 0.0
+    "cvd": 0.3287,
+    "entropy": 0.2865,
+    "rsi": 0.2023,
+    "volatility_atr": 0.1825
   },
   "confusion_matrix": [
     [
-      65038,
-      220
+      32441,
+      35554
     ],
     [
-      35397,
-      135
+      17159,
+      19956
     ]
   ],
-  "trained_at": "2025-12-17T18:33:56.477587",
+  "trained_at": "2025-12-19T22:15:06.507129",
   "model_version": "sniper_v1"
 }

@@ -40,7 +40,7 @@ logger = logging.getLogger("backfill")
 # ============================================================================
 SYMBOL = os.getenv("SYMBOL", "BTC/USDT")
 TIMEFRAME = os.getenv("TIMEFRAME", "1m")
-DAYS_BACK = int(os.getenv("DAYS_BACK", 90))
+DAYS_BACK = int(os.getenv("DAYS_BACK", 365))
 
 # Paths
 DATA_DIR = Path(os.getenv("DATA_DIR", "./data"))
