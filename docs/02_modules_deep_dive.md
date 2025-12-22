@@ -1,6 +1,7 @@
 # 🔬 Modules Deep Dive
 
-> **Technical documentation for each VOSTOK-1 component**
+> **Technical documentation for each VOSTOK-1 component**  
+> **Versão:** 2.0 | **Última Atualização:** 2025-12-22
 
 ---
 
@@ -147,8 +148,8 @@ SCORING:
 
 ### GPU Allocation
 
-- **Device**: NVIDIA Quadro P2000 (GPU 0)
-- **VRAM**: ~5GB available (low VRAM mode enabled)
+- **Device**: NVIDIA RTX 2060 (GPU 0)
+- **VRAM**: ~6GB (Qwen 2.5 7B carregado)
 - **Keep Alive**: 24h (model stays loaded)
 
 ---
@@ -239,22 +240,32 @@ await asyncio.gather(
 ### Pipeline Steps
 
 1. **Ingest**: Load `dataset.jsonl` (min 50 samples)
-2. **Prepare**: Extract features (RSI, CVD, Entropy, ATR, Funding)
-3. **Train**: RandomForest (n=100, depth=5, balanced, no shuffle)
+2. **Prepare**: Extract features (RSI, CVD, Entropy, ATR)
+3. **Train**: RandomForest (n=200, depth=10, balanced, no shuffle)
 4. **Validate**: Precision, Recall, F1, Confusion Matrix
-5. **Export**: Save `sniper_v1.pkl` if precision > 0.5
+5. **Export**: Save `sniper_v1.pkl` if precision > 0.35
 
 ### Model Configuration
 
 ```python
 RandomForestClassifier(
-    n_estimators=100,
-    max_depth=5,           # Prevent overfitting
+    n_estimators=200,
+    max_depth=10,          # Prevent overfitting
+    min_samples_leaf=50,   # Require statistical evidence
     class_weight='balanced',
     random_state=42,
     n_jobs=-1,             # Use all cores
 )
 ```
+
+### Current Model Metrics (sniper_v1)
+
+| Metric | Value |
+|--------|-------|
+| **Precision** | 35.95% |
+| **Recall** | 53.77% |
+| **F1-Score** | 43.09% |
+| **Threshold** | 0.52 |
 
 ---
 

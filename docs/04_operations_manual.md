@@ -1,6 +1,7 @@
 # 📖 Operations Manual
 
-> **Day-to-day operation guide for VOSTOK-1**
+> **Day-to-day operation guide for VOSTOK-1**  
+> **Versão:** 2.0 | **Última Atualização:** 2025-12-22
 
 ---
 
@@ -138,7 +139,7 @@ docker compose build --no-cache <service>
 |-----------|-------------|
 | **CPU** | 4 cores |
 | **RAM** | 8 GB |
-| **GPU** | NVIDIA (4GB VRAM) |
+| **GPU** | NVIDIA (6GB VRAM) |
 | **Storage** | 20 GB SSD |
 
 ### Recommended
@@ -147,7 +148,7 @@ docker compose build --no-cache <service>
 |-----------|-------------|
 | **CPU** | 8+ cores |
 | **RAM** | 16 GB |
-| **GPU** | NVIDIA (8GB VRAM) |
+| **GPU** | NVIDIA RTX 2060 (6GB VRAM) |
 | **Storage** | 50 GB NVMe |
 
 ### GPU Configuration

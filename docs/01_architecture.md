@@ -1,13 +1,15 @@
 # 🏗️ VOSTOK-1 Architecture Overview
 
-> **Hybrid Trading System: Algorithmic + Generative AI**
+> **Hybrid Trading System: Algorithmic + Generative AI**  
+> **Versão:** 2.0 (Dell G5 / RTX 2060 Era)  
+> **Última Atualização:** 2025-12-22  
 
 ## System Philosophy
 
 VOSTOK-1 is a **Hybrid High-Frequency Trading (HFT) System** that combines:
 - 🤖 **Algorithmic Analysis**: Real-time technical indicators (RSI, CVD, ATR, Entropy)
 - 🧠 **Generative AI**: Sentiment analysis via local LLM (Qwen 2.5)
-- 📊 **Machine Learning**: Meta-labeling with Random Forest (training pipeline)
+- 📊 **Machine Learning**: Random Forest classifier for trade signals
 
 ---
 
@@ -39,7 +41,8 @@ flowchart TB
 
     subgraph Consumption["📊 Consumption Layer"]
         MONITOR["MONITOR TUI<br/>Rich Dashboard<br/>8 FPS Refresh"]
-        DECISION["DECISION ENGINE<br/>Triple Barrier<br/>Meta-Labeling"]
+        DECISION["DECISION ENGINE<br/>Random Forest ML<br/>Signal Generation"]
+        EXECUTION["EXECUTION<br/>Paper Trading<br/>Position Management"]
         TRAINER["TRAINER<br/>Random Forest<br/>Batch Processing"]
     end
 
@@ -146,10 +149,9 @@ flowchart TB
 
 ## GPU Allocation
 
-| GPU | Device ID | Allocation |
-|-----|-----------|------------|
-| Quadro P2000 | `0` | Ollama/Qwen (Dedicated) |
-| Quadro P2000 | `1` | Desktop/Windows |
+| GPU | Device ID | Allocation | VRAM |
+|-----|-----------|------------|------|
+| **NVIDIA RTX 2060** | `0` | Ollama/Qwen (Dedicated) | 6GB |
 
 ---
 
@@ -158,3 +160,5 @@ flowchart TB
 - [02_modules_deep_dive.md](./02_modules_deep_dive.md) - Component Details
 - [03_strategy_logic.md](./03_strategy_logic.md) - Trading Strategy
 - [04_operations_manual.md](./04_operations_manual.md) - Operations Guide
+- [05_training_report.md](./05_training_report.md) - Training Report & Metrics
+- [vostok_v2_roadmap.md](./vostok_v2_roadmap.md) - V2 Architecture Roadmap

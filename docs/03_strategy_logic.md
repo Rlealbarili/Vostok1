@@ -1,6 +1,7 @@
 # 🧠 Strategy Logic
 
-> **The Financial Brain of VOSTOK-1**
+> **The Financial Brain of VOSTOK-1**  
+> **Versão:** 2.0 | **Última Atualização:** 2025-12-22
 
 ---
 
@@ -51,9 +52,10 @@ CVD:             ──────────[+0.45]───────
 ### Triple Barrier Parameters
 
 ```python
-TAKE_PROFIT = 1.5%    # Exit with profit
-STOP_LOSS = 0.75%     # Risk:Reward = 1:2
-TIME_LIMIT = 60min    # Max hold time
+# ATR-based Dynamic Barriers
+TAKE_PROFIT = 2.0 * ATR   # Dynamic TP
+STOP_LOSS = 1.0 * ATR     # Dynamic SL (Risk:Reward = 1:2)
+TIME_LIMIT = 45min        # Max hold time
 ```
 
 ### Position Sizing (Future)
@@ -174,12 +176,12 @@ flowchart TD
 
 | Metric | Value |
 |--------|-------|
-| Win Rate | 58% |
-| Average Win | +1.2% |
-| Average Loss | -0.6% |
+| Win Rate | 34.57% (Paper) |
+| Precision | 35.95% |
+| Recall | 53.77% |
 | Risk/Reward | 1:2 |
-| Sharpe Ratio | 1.8 |
-| Max Drawdown | -4.2% |
+| Expected Value | +7.85%/trade |
+| Drawdown (Paper) | -0.33% |
 
 > ⚠️ **Note**: These are simulated results. Past performance does not guarantee future results.
 
