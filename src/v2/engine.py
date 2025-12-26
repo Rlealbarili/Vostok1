@@ -122,7 +122,7 @@ class VostokV2Engine:
     def __init__(
         self,
         model_path: str = "models/v2/lgbm_model.txt",
-        confidence_threshold: float = 0.60,
+        confidence_threshold: float = 0.70,
         ollama_host: str = "llm_engine",
     ):
         # Initialize components
@@ -309,7 +309,7 @@ class VostokV2Engine:
         logger.info(
             f"🟢 EXECUTE | {ml_direction} | "
             f"Confidence: {ml_result.confidence:.1%} | "
-            f"Regime: {regime_result.regime.value}"
+            f"Regime: {regime_result.status.value}"
         )
         
         self._last_decision = decision
@@ -359,7 +359,7 @@ class VostokV2Engine:
 
 def create_engine(
     model_path: str = "models/v2/lgbm_model.txt",
-    confidence_threshold: float = 0.60,
+    confidence_threshold: float = 0.70,
     ollama_host: str = "llm_engine",
 ) -> VostokV2Engine:
     """Factory function para criar VostokV2Engine."""

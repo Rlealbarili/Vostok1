@@ -33,6 +33,12 @@ try:
 except ImportError:
     HAS_REQUESTS = False
 
+try:
+    import redis
+    HAS_REDIS = True
+except ImportError:
+    HAS_REDIS = False
+
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
@@ -50,12 +56,17 @@ BINANCE_API_URL = "https://api.binance.com/api/v3/klines"
 SYMBOL = "BTCUSDT"
 INITIAL_BALANCE = 200.0
 POSITION_SIZE_PCT = 0.95  # 95% do saldo por trade
-TP_MULTIPLIER = 2.0
-SL_MULTIPLIER = 1.0
+TP_MULTIPLIER = 3.0
+SL_MULTIPLIER = 1.5
 LOOP_INTERVAL = 60  # seconds
 
 LOG_DIR = Path("data/logs")
 TRADE_LOG_FILE = LOG_DIR / "v2_paper_trades.csv"
+
+# Redis Configuration for News
+REDIS_HOST = os.environ.get("REDIS_HOST", "vostok_redis")
+REDIS_PORT = int(os.environ.get("REDIS_PORT", 6379))
+SENTIMENT_STREAM = "stream:signals:sentiment"
 
 
 # ============================================================================
@@ -116,6 +127,69 @@ class BotState:
     signals: int = 0
     wins: int = 0
     losses: int = 0
+
+
+# ============================================================================
+# NEWS FETCHER (Redis Stream)
+# ============================================================================
+
+class NewsFetcher:
+    """Busca últimas headlines do Redis Stream de sentimento."""
+    
+    def __init__(self):
+        self.redis_client = None
+        self.last_headlines = None
+        self._connect()
+    
+    def _connect(self):
+        """Conecta ao Redis."""
+        if not HAS_REDIS:
+            logger.warning("⚠️ Redis não instalado - Buffett operará sem notícias")
+            return
+        
+        try:
+            self.redis_client = redis.Redis(
+                host=REDIS_HOST,
+                port=REDIS_PORT,
+                decode_responses=True,
+                socket_timeout=5,
+            )
+            self.redis_client.ping()
+            logger.info(f"✅ Redis conectado para News: {REDIS_HOST}:{REDIS_PORT}")
+        except Exception as e:
+            logger.warning(f"⚠️ Não foi possível conectar ao Redis: {e}")
+            self.redis_client = None
+    
+    def get_latest_headlines(self) -> Optional[str]:
+        """
+        Busca o último registro do stream de sentimento.
+        Retorna o summary das últimas notícias ou None.
+        """
+        if not self.redis_client:
+            return None
+        
+        try:
+            # Buscar último registro do stream
+            result = self.redis_client.xrevrange(
+                SENTIMENT_STREAM,
+                count=1,
+            )
+            
+            if result:
+                msg_id, data = result[0]
+                summary = data.get("summary", "")
+                score = data.get("sentiment_score", "0")
+                headlines_count = data.get("headlines_count", "0")
+                
+                if summary:
+                    # Retornar contexto formatado para o Buffett
+                    return f"Latest market news ({headlines_count} headlines): {summary} [Sentiment: {score}]"
+            
+            return None
+            
+        except Exception as e:
+            logger.debug(f"Erro ao buscar headlines: {e}")
+            return None
 
 
 # ============================================================================
@@ -206,6 +280,7 @@ class PaperTradingBot:
         # Initialize components
         self.engine = VostokV2Engine(ollama_host=ollama_host)
         self.data_fetcher = BinanceDataFetcher()
+        self.news_fetcher = NewsFetcher()
         self.feature_gen = FeatureGenerator()
         
         # State
@@ -446,9 +521,12 @@ class PaperTradingBot:
                 if closed:
                     print()  # New line after close
             
+            # 2.5 Fetch latest news from Redis for Buffett
+            news_context = self.news_fetcher.get_latest_headlines()
+            
             # 3. Analyze market (only if no position)
             if self.state.position is None:
-                decision = await self.engine.analyze_market(df_m1, df_h1, news_context=None)
+                decision = await self.engine.analyze_market(df_m1, df_h1, news_context=news_context)
                 
                 # 4. Execute if signal
                 if decision.action == Action.EXECUTE and decision.direction:
@@ -461,7 +539,7 @@ class PaperTradingBot:
                     print()  # New line after open
             else:
                 # Still update decision for display
-                decision = await self.engine.analyze_market(df_m1, df_h1, news_context=None)
+                decision = await self.engine.analyze_market(df_m1, df_h1, news_context=news_context)
             
             # 5. Print status
             self._print_status(current_price, decision, atr)

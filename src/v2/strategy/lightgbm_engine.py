@@ -38,7 +38,7 @@ logger = logging.getLogger("lightgbm_engine")
 # ============================================================================
 
 DEFAULT_MODEL_PATH = "models/v2/lgbm_model.txt"
-DEFAULT_CONFIDENCE_THRESHOLD = 0.60
+DEFAULT_CONFIDENCE_THRESHOLD = 0.70
 MIN_DATAFRAME_ROWS = 100
 
 
